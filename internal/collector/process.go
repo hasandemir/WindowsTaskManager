@@ -1,0 +1,188 @@
+//go:build windows
+
+package collector
+
+import (
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"golang.org/x/sys/windows"
+
+	"github.com/ersinkoc/WindowsTaskManager/internal/metrics"
+	"github.com/ersinkoc/WindowsTaskManager/internal/winapi"
+)
+
+// procPrev tracks the prior CPU time slice for a single PID so the next
+// sample can compute a percentage.
+type procPrev struct {
+	kernelTicks uint64
+	userTicks   uint64
+	sampleTime  time.Time
+}
+
+// ProcessCollector enumerates running processes and computes per-process CPU%.
+type ProcessCollector struct {
+	mu         sync.Mutex
+	prev       map[uint32]procPrev
+	maxResults int
+	numLogical int
+}
+
+func NewProcessCollector(maxResults int) *ProcessCollector {
+	if maxResults <= 0 {
+		maxResults = 2000
+	}
+	return &ProcessCollector{
+		prev:       make(map[uint32]procPrev),
+		maxResults: maxResults,
+		numLogical: runtime.NumCPU(),
+	}
+}
+
+// Collect returns the current process list. It limits results to maxResults
+// after sorting by working set descending so we always retain the heaviest
+// processes when there are too many.
+func (pc *ProcessCollector) Collect() []metrics.ProcessInfo {
+	snap, err := winapi.CreateToolhelp32Snapshot(winapi.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil
+	}
+	defer winapi.CloseHandleSafe(snap)
+
+	var entry winapi.PROCESSENTRY32W
+	if err := winapi.Process32First(snap, &entry); err != nil {
+		return nil
+	}
+
+	now := time.Now()
+	results := make([]metrics.ProcessInfo, 0, 256)
+	live := make(map[uint32]procPrev, 256)
+
+	for {
+		info := pc.collectOne(entry, now, live)
+		results = append(results, info)
+		if err := winapi.Process32Next(snap, &entry); err != nil {
+			break
+		}
+	}
+
+	pc.mu.Lock()
+	pc.prev = live
+	pc.mu.Unlock()
+
+	if len(results) > pc.maxResults {
+		// Trim least-interesting (smallest working set) entries.
+		results = trimByWorkingSet(results, pc.maxResults)
+	}
+
+	return results
+}
+
+const accessLimited = windows.PROCESS_QUERY_LIMITED_INFORMATION | windows.PROCESS_VM_READ
+
+func (pc *ProcessCollector) collectOne(entry winapi.PROCESSENTRY32W, now time.Time, live map[uint32]procPrev) metrics.ProcessInfo {
+	name := windows.UTF16ToString(entry.ExeFile[:])
+	info := metrics.ProcessInfo{
+		PID:         entry.ProcessID,
+		ParentPID:   entry.ParentProcessID,
+		Name:        name,
+		ThreadCount: entry.Threads,
+		Status:      "running",
+	}
+
+	if entry.ProcessID == 0 || entry.ProcessID == 4 {
+		info.IsCritical = true
+		live[entry.ProcessID] = procPrev{sampleTime: now}
+		return info
+	}
+
+	h, err := winapi.OpenProcessHandle(accessLimited, entry.ProcessID)
+	if err != nil {
+		// Many system processes deny query — return what we have.
+		live[entry.ProcessID] = procPrev{sampleTime: now}
+		return info
+	}
+	defer winapi.CloseHandleSafe(h)
+
+	if mem, err := winapi.GetProcessMemoryInfo(h); err == nil && mem != nil {
+		info.WorkingSet = uint64(mem.WorkingSetSize)
+		info.PrivateBytes = uint64(mem.PrivateUsage)
+		info.PageFaults = mem.PageFaultCount
+	}
+
+	if io, err := winapi.GetProcessIoCounters(h); err == nil && io != nil {
+		info.IOReadBytes = io.ReadTransferCount
+		info.IOWriteBytes = io.WriteTransferCount
+		info.IOReadOps = io.ReadOperationCount
+		info.IOWriteOps = io.WriteOperationCount
+	}
+
+	create, _, kernel, user, terr := winapi.GetProcessTimes(h)
+	if terr == nil {
+		info.CreateTime = winapi.FileTimeToUnix(create)
+		kt := kernel.Ticks()
+		ut := user.Ticks()
+
+		pc.mu.Lock()
+		prev, hasPrev := pc.prev[entry.ProcessID]
+		pc.mu.Unlock()
+
+		if hasPrev {
+			elapsed := now.Sub(prev.sampleTime).Seconds()
+			if elapsed > 0 {
+				deltaTicks := float64((kt - prev.kernelTicks) + (ut - prev.userTicks))
+				cpuSeconds := deltaTicks / 1e7 // 100ns -> seconds
+				cpuPercent := (cpuSeconds / elapsed) * 100.0 / float64(pc.numLogical)
+				if cpuPercent < 0 {
+					cpuPercent = 0
+				}
+				if cpuPercent > 100 {
+					cpuPercent = 100
+				}
+				info.CPUPercent = cpuPercent
+			}
+		}
+		live[entry.ProcessID] = procPrev{
+			kernelTicks: kt,
+			userTicks:   ut,
+			sampleTime:  now,
+		}
+	} else {
+		live[entry.ProcessID] = procPrev{sampleTime: now}
+	}
+
+	if path, err := winapi.QueryFullProcessImageName(h); err == nil {
+		info.ExePath = path
+		// Prefer the basename from path if PROCESSENTRY32 had a truncated name.
+		if base := filepath.Base(path); base != "" && !strings.EqualFold(base, info.Name) {
+			info.Name = base
+		}
+	}
+
+	if crit, err := winapi.IsProcessCritical(h); err == nil && crit {
+		info.IsCritical = true
+	}
+
+	if pri, err := winapi.GetPriorityClass(h); err == nil {
+		info.PriorityClass = pri
+	}
+
+	return info
+}
+
+func trimByWorkingSet(list []metrics.ProcessInfo, n int) []metrics.ProcessInfo {
+	if len(list) <= n {
+		return list
+	}
+	// Selection-based trim: sort descending by WorkingSet then truncate.
+	sortByWorkingSetDesc(list)
+	return list[:n]
+}
+
+func sortByWorkingSetDesc(a []metrics.ProcessInfo) {
+	sort.Slice(a, func(i, j int) bool { return a[i].WorkingSet > a[j].WorkingSet })
+}

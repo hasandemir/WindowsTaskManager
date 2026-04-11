@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Windows Task Manager</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<header class="topbar">
+  <h1>WTM</h1>
+  <nav>
+    <button data-tab="overview" class="tab active">Overview</button>
+    <button data-tab="processes" class="tab">Processes</button>
+    <button data-tab="tree" class="tab">Tree</button>
+    <button data-tab="ports" class="tab">Ports</button>
+    <button data-tab="disks" class="tab">Disks</button>
+    <button data-tab="alerts" class="tab">Alerts</button>
+    <button data-tab="rules" class="tab">Rules</button>
+    <button data-tab="ai" class="tab">AI</button>
+  </nav>
+  <div class="status">
+    <label class="refresh-ctrl" title="How often the UI repaints. SSE still streams at the server's interval.">
+      <span>⟳</span>
+      <select id="refresh-rate">
+        <option value="500">0.5s</option>
+        <option value="1000">1s</option>
+        <option value="2000">2s</option>
+        <option value="3000">3s</option>
+        <option value="5000">5s</option>
+      </select>
+    </label>
+    <span id="ai-pill" class="badge ai-pill" hidden></span>
+    <span id="conn" class="badge offline">offline</span>
+    <span id="clock"></span>
+  </div>
+</header>
+
+<main>
+  <section id="tab-overview" class="tab-pane active">
+    <div class="cards">
+      <article class="card">
+        <h2>CPU</h2>
+        <div class="bigval"><span id="cpu-total">--</span>%</div>
+        <div class="muted" id="cpu-name">--</div>
+        <canvas id="cpu-spark" height="48"></canvas>
+      </article>
+      <article class="card">
+        <h2>Memory</h2>
+        <div class="bigval"><span id="mem-pct">--</span>%</div>
+        <div class="muted"><span id="mem-used">--</span> / <span id="mem-total">--</span></div>
+        <canvas id="mem-spark" height="48"></canvas>
+      </article>
+      <article class="card">
+        <h2>GPU</h2>
+        <div class="bigval"><span id="gpu-pct">--</span>%</div>
+        <div class="muted" id="gpu-name">--</div>
+      </article>
+      <article class="card">
+        <h2>Network</h2>
+        <div class="bigval"><span id="net-down">0</span> ↓ <span id="net-up">0</span> ↑</div>
+        <div class="muted">interfaces: <span id="net-iface">0</span></div>
+      </article>
+    </div>
+    <h3>Per-core utilization</h3>
+    <div id="cores"></div>
+  </section>
+
+  <section id="tab-processes" class="tab-pane">
+    <div class="toolbar">
+      <input id="proc-filter" placeholder="filter by name…" />
+      <select id="proc-sort">
+        <option value="cpu">CPU</option>
+        <option value="memory">Memory</option>
+        <option value="name">Name</option>
+        <option value="pid">PID</option>
+        <option value="threads">Threads</option>
+      </select>
+    </div>
+    <table class="proc-table">
+      <thead><tr>
+        <th>PID</th><th>Name</th><th>CPU%</th><th>Memory</th><th>Threads</th><th>Status</th><th></th>
+      </tr></thead>
+      <tbody id="proc-body"></tbody>
+    </table>
+  </section>
+
+  <section id="tab-tree" class="tab-pane">
+    <ul id="tree-root" class="tree"></ul>
+  </section>
+
+  <section id="tab-ports" class="tab-pane">
+    <table class="ports-table">
+      <thead><tr>
+        <th>Proto</th><th>Local</th><th>Remote</th><th>State</th><th>PID</th><th>Process</th><th>Label</th>
+      </tr></thead>
+      <tbody id="ports-body"></tbody>
+    </table>
+  </section>
+
+  <section id="tab-disks" class="tab-pane">
+    <div id="disks"></div>
+  </section>
+
+  <section id="tab-alerts" class="tab-pane">
+    <h3>Active</h3>
+    <ul id="alerts-active" class="alerts"></ul>
+    <h3>History</h3>
+    <ul id="alerts-history" class="alerts muted"></ul>
+  </section>
+
+  <section id="tab-rules" class="tab-pane">
+    <div class="rules-header">
+      <div>
+        <h3 style="margin:0">Automation rules</h3>
+        <p class="muted" style="margin:4px 0">If a process matching <em>match</em> has <em>metric</em> <em>op</em> <em>threshold</em> for <em>for</em> seconds, run <em>action</em>.</p>
+      </div>
+      <div class="rules-actions">
+        <button id="rules-add" type="button">+ Add rule</button>
+        <button id="rules-save" type="button" class="primary">Save</button>
+        <span id="rules-save-msg" class="muted"></span>
+      </div>
+    </div>
+    <table class="rules-table">
+      <thead><tr>
+        <th>On</th><th>Name</th><th>Match</th><th>Metric</th><th>Op</th><th>Threshold</th><th>For (s)</th><th>Action</th><th>Cooldown (s)</th><th></th>
+      </tr></thead>
+      <tbody id="rules-body"></tbody>
+    </table>
+    <details class="rules-help">
+      <summary>Help &amp; examples</summary>
+      <ul>
+        <li><code>metric=memory_bytes op=&gt;= threshold=4000000000 for=30</code> — kill if process uses ≥ 4 GB for 30s</li>
+        <li><code>metric=cpu_percent op=&gt;= threshold=90 for=60 action=suspend</code> — suspend runaway at 90% for 60s</li>
+        <li><code>metric=thread_count op=&gt;= threshold=500</code> — alert on thread leaks</li>
+        <li>Match is a case-insensitive substring of the process name (e.g. <code>chrome.exe</code>, <code>node</code>).</li>
+        <li>Cooldown defaults to 60s — prevents repeated kills of restarted processes.</li>
+      </ul>
+    </details>
+  </section>
+
+  <section id="tab-ai" class="tab-pane">
+    <div class="ai-status" id="ai-status">checking…</div>
+
+    <details id="ai-settings" class="ai-settings">
+      <summary>Provider settings</summary>
+      <div class="ai-form">
+        <label class="ai-row">
+          <span>Preset</span>
+          <select id="ai-preset"><option value="">— pick a starter —</option></select>
+        </label>
+        <label class="ai-row">
+          <span>Provider</span>
+          <select id="ai-provider">
+            <option value="anthropic">Anthropic (/v1/messages)</option>
+            <option value="openai">OpenAI compatible (/v1/chat/completions)</option>
+          </select>
+        </label>
+        <label class="ai-row">
+          <span>Endpoint</span>
+          <input id="ai-endpoint" type="url" placeholder="leave blank for provider default" />
+        </label>
+        <label class="ai-row">
+          <span>Model <small id="ai-model-count" class="muted"></small></span>
+          <input id="ai-model" type="text" list="ai-model-list" placeholder="type to search models.dev catalog…" autocomplete="off" />
+          <datalist id="ai-model-list"></datalist>
+        </label>
+        <label class="ai-row">
+          <span>API key <small id="ai-apikey-state" class="muted"></small></span>
+          <input id="ai-apikey" type="password" placeholder="paste key" autocomplete="off" />
+        </label>
+        <label class="ai-row">
+          <span>Language</span>
+          <select id="ai-language">
+            <option value="tr">tr</option>
+            <option value="en">en</option>
+          </select>
+        </label>
+        <label class="ai-row">
+          <span>Max tokens</span>
+          <input id="ai-maxtokens" type="number" min="64" max="8192" step="64" />
+        </label>
+        <label class="ai-row">
+          <span>Req / min</span>
+          <input id="ai-rpm" type="number" min="1" max="120" />
+        </label>
+        <label class="ai-row">
+          <span>Extra headers</span>
+          <textarea id="ai-headers" rows="3" placeholder="One per line: Header-Name: value"></textarea>
+        </label>
+        <label class="ai-row checkbox">
+          <input id="ai-enabled" type="checkbox" />
+          <span>Enabled</span>
+        </label>
+        <div class="ai-row buttons">
+          <button id="ai-save" type="button">Save</button>
+          <span id="ai-save-msg" class="muted"></span>
+        </div>
+        <p class="muted" id="ai-preset-note"></p>
+      </div>
+    </details>
+
+    <textarea id="ai-prompt" rows="4" placeholder="Bir soru sor… (boş bırakabilirsin)"></textarea>
+    <button id="ai-send">Analyze</button>
+    <pre id="ai-answer" class="ai-answer"></pre>
+  </section>
+</main>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

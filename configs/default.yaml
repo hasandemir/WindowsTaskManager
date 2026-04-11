@@ -1,0 +1,124 @@
+server:
+  host: 127.0.0.1
+  port: 19876
+  open_browser: true
+
+monitoring:
+  interval: 1s
+  process_tree_interval: 2s
+  port_scan_interval: 3s
+  gpu_interval: 2s
+  history_duration: 10m
+  max_processes: 2000
+
+controller:
+  protected_processes:
+    - csrss.exe
+    - wininit.exe
+    - lsass.exe
+    - smss.exe
+    - services.exe
+    - svchost.exe
+    - winlogon.exe
+  confirm_kill_system: true
+
+anomaly:
+  analysis_interval: 2s
+  spawn_storm:
+    enabled: true
+    max_children_per_minute: 20
+    max_total_children: 50
+    action: alert
+  memory_leak:
+    enabled: true
+    window: 5m
+    min_growth_rate: 10MB/min
+    min_r_squared: 0.8
+    memory_threshold: 2GB
+    action: alert
+  hung_process:
+    enabled: true
+    zero_activity_threshold: 120s
+    critical_hung_threshold: 300s
+    idle_whitelist:
+      - SearchIndexer.exe
+      - spoolsv.exe
+    action: alert
+  orphan:
+    enabled: true
+    resource_threshold_cpu: 1
+    resource_threshold_memory: 100MB
+    action: alert
+  runaway_cpu:
+    enabled: true
+    cpu_threshold: 90
+    duration_threshold: 60s
+    critical_duration: 180s
+    action: alert
+  port_conflict:
+    enabled: true
+    time_wait_threshold: 120s
+    close_wait_threshold: 60s
+    action: alert
+  network_anomaly:
+    enabled: true
+    connection_sigma: 3
+    max_system_connections: 10000
+    action: alert
+  new_process:
+    enabled: true
+    suspicious_paths:
+      - "%TEMP%"
+      - "%USERPROFILE%\\Downloads"
+    action: info
+
+notifications:
+  tray_balloon: true
+  balloon_rate_limit: 30s
+  balloon_min_severity: critical
+
+well_known_ports:
+  22: SSH
+  80: HTTP Server
+  443: HTTPS Server
+  3000: "Dev Server (React/Next.js)"
+  5173: Vite Dev Server
+  5432: PostgreSQL
+  6379: Redis
+  8080: HTTP Alt / Spring Boot
+  9090: Prometheus
+  27017: MongoDB
+
+ai:
+  enabled: false
+  # provider: "anthropic" -> /v1/messages (Claude)
+  # provider: "openai"    -> /v1/chat/completions (OpenAI, OpenRouter, Groq,
+  #                          DeepSeek, Together, Mistral, Fireworks, xAI,
+  #                          Ollama, LM Studio, vLLM, llama.cpp, ...)
+  provider: anthropic
+  api_key: ""
+  model: claude-sonnet-4-20250514
+  # Leave blank to use the provider's default endpoint, or paste any
+  # OpenAI-compatible URL such as:
+  #   https://openrouter.ai/api/v1/chat/completions
+  #   https://api.groq.com/openai/v1/chat/completions
+  #   https://api.deepseek.com/v1/chat/completions
+  #   http://localhost:11434/v1/chat/completions   (Ollama)
+  endpoint: ""
+  # Optional headers attached to every request (OpenRouter ranking headers, etc.)
+  extra_headers: {}
+  auto_analyze_on_critical: true
+  max_tokens: 1024
+  max_requests_per_minute: 5
+  language: tr
+  include_process_tree: true
+  include_port_map: true
+  history_context_duration: 5m
+
+ui:
+  theme: system
+  default_sort: cpu
+  default_sort_order: desc
+  sparkline_points: 60
+  process_table_page_size: 100
+  refresh_rate: 1s

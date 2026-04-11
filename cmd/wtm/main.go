@@ -79,7 +79,14 @@ func main() {
 		engine.SetConfig(newCfg)
 		advisor.SetConfig(newCfg)
 		alerts.SetMaxActive(newCfg.Anomaly.MaxActiveAlerts)
+		// Purge active alerts whose detector is now disabled — otherwise the
+		// UI keeps showing stale entries that will never refresh or clear.
+		clearDisabledDetectorAlerts(alerts, newCfg)
 	}
+	// Apply once right after startup so a fresh load (including schema
+	// migration that flipped a detector off) immediately drops stale alerts
+	// from any previous run's active set.
+	clearDisabledDetectorAlerts(alerts, cfg)
 
 	srv := server.New(server.Options{
 		Cfg:        cfg,
@@ -151,6 +158,38 @@ func main() {
 	defer shutdownCancel()
 	_ = srv.Shutdown(shutdownCtx)
 	trayWG.Wait()
+}
+
+// clearDisabledDetectorAlerts wipes any active alerts whose detector was just
+// turned off. Types must match the string names each detector returns from
+// its Name() method.
+func clearDisabledDetectorAlerts(alerts *anomaly.AlertStore, cfg *config.Config) {
+	a := cfg.Anomaly
+	if !a.HungProcess.Enabled {
+		alerts.ClearByType("hung_process")
+	}
+	if !a.Orphan.Enabled {
+		alerts.ClearByType("orphan")
+	}
+	if !a.PortConflict.Enabled {
+		alerts.ClearByType("port_conflict")
+	}
+	if !a.NetworkAnomaly.Enabled {
+		alerts.ClearByType("network_anomaly")
+		alerts.ClearByType("network_anomaly_system")
+	}
+	if !a.SpawnStorm.Enabled {
+		alerts.ClearByType("spawn_storm")
+	}
+	if !a.MemoryLeak.Enabled {
+		alerts.ClearByType("memory_leak")
+	}
+	if !a.RunawayCPU.Enabled {
+		alerts.ClearByType("runaway_cpu")
+	}
+	if !a.NewProcess.Enabled {
+		alerts.ClearByType("new_process")
+	}
 }
 
 // resolveConfigPath chooses the active config file.

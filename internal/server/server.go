@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ersinkoc/WindowsTaskManager/internal/ai"
 	"github.com/ersinkoc/WindowsTaskManager/internal/anomaly"
 	"github.com/ersinkoc/WindowsTaskManager/internal/config"
 	"github.com/ersinkoc/WindowsTaskManager/internal/controller"
@@ -17,11 +18,10 @@ import (
 )
 
 // AIAdvisor is the minimal interface the server needs from the AI package.
-// We declare it here to avoid an import cycle when the AI package is wired.
 type AIAdvisor interface {
 	Enabled() bool
 	Status() map[string]any
-	Analyze(ctx context.Context, prompt string) (string, error)
+	Analyze(ctx context.Context, prompt string) (*ai.AnalyzeResult, error)
 }
 
 // Server is the HTTP server hosting the REST API, SSE stream, and embedded UI.

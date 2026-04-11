@@ -2,11 +2,55 @@ package anomaly
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ersinkoc/WindowsTaskManager/internal/metrics"
 )
+
+// spawnStormWhitelist is a hard-coded parent exclusion list: shells, browsers,
+// dev tools, and terminal hosts that legitimately fork many children under
+// normal use. Having it in code (not just config) means a first-time user
+// isn't buried in spawn-storm alerts before they've even tuned anything.
+var spawnStormWhitelist = map[string]struct{}{
+	// Shells / terminals
+	"cmd.exe":             {},
+	"powershell.exe":      {},
+	"pwsh.exe":            {},
+	"bash.exe":            {},
+	"wsl.exe":             {},
+	"wslhost.exe":         {},
+	"windowsterminal.exe": {},
+	"openconsole.exe":     {},
+	"conhost.exe":         {},
+	// Browsers (all Chromium-based browsers spawn ~1 child per tab)
+	"chrome.exe":    {},
+	"msedge.exe":    {},
+	"brave.exe":     {},
+	"firefox.exe":   {},
+	"zen.exe":       {},
+	"opera.exe":     {},
+	"vivaldi.exe":   {},
+	"librewolf.exe": {},
+	"arc.exe":       {},
+	// Dev / build tools
+	"node.exe":   {},
+	"bun.exe":    {},
+	"deno.exe":   {},
+	"python.exe": {},
+	"python3.exe": {},
+	"go.exe":     {},
+	"cargo.exe":  {},
+	"docker.exe": {},
+	"code.exe":   {},
+	"windsurf.exe": {},
+}
+
+func isSpawnStormWhitelisted(name string) bool {
+	_, ok := spawnStormWhitelist[strings.ToLower(name)]
+	return ok
+}
 
 // SpawnStormDetector flags processes spawning excessive children rapidly.
 // It tracks per-parent child counts within the last 60 seconds.
@@ -75,6 +119,12 @@ func (d *SpawnStormDetector) Analyze(ctx *AnalysisContext) {
 		if len(fresh) >= cfg.MaxChildrenPerMinute {
 			parent := findProcess(ctx.Snapshot.Processes, parentPID)
 			if parent == nil {
+				continue
+			}
+			if isIgnoredProcess(ctx.Cfg, parent.Name) {
+				continue
+			}
+			if isSpawnStormWhitelisted(parent.Name) {
 				continue
 			}
 			ctx.RaiseAlert(Alert{

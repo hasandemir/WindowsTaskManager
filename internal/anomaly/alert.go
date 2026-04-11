@@ -95,6 +95,40 @@ func (s *AlertStore) Raise(a Alert) (Alert, bool) {
 	return cp, true
 }
 
+// ClearByType removes every active alert whose Type matches typeName,
+// regardless of PID. Called when a detector gets disabled at runtime so the
+// UI isn't left with stale entries that will never be re-raised or cleared.
+// Returns the number of alerts removed.
+func (s *AlertStore) ClearByType(typeName string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	removed := 0
+	for key, a := range s.active {
+		if a.Type == typeName {
+			a.Cleared = &now
+			delete(s.active, key)
+			removed++
+		}
+	}
+	return removed
+}
+
+// ClearAll empties the active alert set. Used by the "clear all" UI button
+// to dig the user out of an alert flood without restarting the process.
+// Returns the number of alerts removed.
+func (s *AlertStore) ClearAll() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	removed := len(s.active)
+	for key, a := range s.active {
+		a.Cleared = &now
+		delete(s.active, key)
+	}
+	return removed
+}
+
 // Clear marks an active alert as cleared.
 func (s *AlertStore) Clear(typeName string, pid uint32) {
 	s.mu.Lock()

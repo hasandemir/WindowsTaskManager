@@ -95,8 +95,8 @@ func TestAnthropicCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
-	if got != "hello from claude" {
-		t.Errorf("answer = %q", got)
+	if got.Answer != "hello from claude" {
+		t.Errorf("answer = %q", got.Answer)
 	}
 	if receivedKey != "sk-ant-test" {
 		t.Errorf("x-api-key = %q", receivedKey)
@@ -148,8 +148,8 @@ func TestOpenAICall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
-	if got != "hello from gpt" {
-		t.Errorf("answer = %q", got)
+	if got.Answer != "hello from gpt" {
+		t.Errorf("answer = %q", got.Answer)
 	}
 	if receivedAuth != "Bearer sk-test" {
 		t.Errorf("Authorization = %q", receivedAuth)

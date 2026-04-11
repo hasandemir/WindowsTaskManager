@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="tr">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -18,6 +18,7 @@
     <button data-tab="alerts" class="tab">Alerts</button>
     <button data-tab="rules" class="tab">Rules</button>
     <button data-tab="ai" class="tab">AI</button>
+    <button data-tab="about" class="tab">About</button>
   </nav>
   <div class="status">
     <label class="refresh-ctrl" title="How often the UI repaints. SSE still streams at the server's interval.">
@@ -79,7 +80,13 @@
     </div>
     <table class="proc-table">
       <thead><tr>
-        <th>PID</th><th>Name</th><th>CPU%</th><th>Memory</th><th>Threads</th><th>Status</th><th></th>
+        <th class="sortable" data-sort="pid">PID<span class="sort-ind"></span></th>
+        <th class="sortable" data-sort="name">Name<span class="sort-ind"></span></th>
+        <th class="sortable" data-sort="cpu">CPU%<span class="sort-ind"></span></th>
+        <th class="sortable" data-sort="memory">Memory<span class="sort-ind"></span></th>
+        <th class="sortable" data-sort="threads">Threads<span class="sort-ind"></span></th>
+        <th>Flags</th>
+        <th></th>
       </tr></thead>
       <tbody id="proc-body"></tbody>
     </table>
@@ -103,7 +110,10 @@
   </section>
 
   <section id="tab-alerts" class="tab-pane">
-    <h3>Active</h3>
+    <div class="alerts-header">
+      <h3>Active</h3>
+      <button id="alerts-clear" type="button" title="Wipe the active alert set without touching history">Clear all</button>
+    </div>
     <ul id="alerts-active" class="alerts"></ul>
     <h3>History</h3>
     <ul id="alerts-history" class="alerts muted"></ul>
@@ -170,13 +180,6 @@
           <input id="ai-apikey" type="password" placeholder="paste key" autocomplete="off" />
         </label>
         <label class="ai-row">
-          <span>Language</span>
-          <select id="ai-language">
-            <option value="tr">tr</option>
-            <option value="en">en</option>
-          </select>
-        </label>
-        <label class="ai-row">
           <span>Max tokens</span>
           <input id="ai-maxtokens" type="number" min="64" max="8192" step="64" />
         </label>
@@ -200,9 +203,42 @@
       </div>
     </details>
 
-    <textarea id="ai-prompt" rows="4" placeholder="Bir soru sor… (boş bırakabilirsin)"></textarea>
+    <textarea id="ai-prompt" rows="4" placeholder="Ask a question… (optional — leave blank for a general health check)"></textarea>
     <button id="ai-send">Analyze</button>
     <pre id="ai-answer" class="ai-answer"></pre>
+    <div id="ai-actions" class="ai-actions"></div>
+  </section>
+
+  <section id="tab-about" class="tab-pane">
+    <article class="about">
+      <h2>Windows Task Manager</h2>
+      <p class="about-tag">A pure-Go, single-binary replacement for the built-in Windows Task Manager — with a live web dashboard, REST API, anomaly engine, and an LLM advisor that proposes fixes you approve one click at a time.</p>
+
+      <h3>What's in the box</h3>
+      <ul>
+        <li><strong>Live metrics.</strong> CPU (per-core), memory, GPU, disks, network, processes, process tree, TCP/UDP endpoints — all over Server-Sent Events.</li>
+        <li><strong>Process control.</strong> Kill, suspend, resume, priority, affinity, Job-Object CPU/memory caps. A protection list keeps critical processes safe from accidental clicks.</li>
+        <li><strong>Per-process toggles.</strong> One click in the process table to protect (🛡) or ignore (🔕) any executable. Both lists persist to <code>config.yaml</code>.</li>
+        <li><strong>Sortable table.</strong> Click any column header to sort; click again to flip direction.</li>
+        <li><strong>Anomaly detection — conservative by default.</strong> Eight detectors ship; only runaway-CPU, memory-leak and spawn-storm fire out of the box. The noisier ones (hung, orphan, port-conflict, network burst) are opt-in.</li>
+        <li><strong>Automation rules.</strong> "If <em>chrome.exe</em> uses ≥ 4 GB for 30 s, kill it." Hot-reloaded from YAML or edited live in the Rules tab.</li>
+        <li><strong>AI advisor with approve-before-execute.</strong> Works with Anthropic Claude or any OpenAI-compatible provider (OpenAI, OpenRouter, Groq, DeepSeek, Ollama, LM Studio, …). The advisor emits structured action suggestions; nothing runs until you click Approve.</li>
+        <li><strong>System tray.</strong> Native NotifyIcon, rate-limited balloon notifications, right-click menu.</li>
+      </ul>
+
+      <h3>Tech</h3>
+      <p>Pure Go — no CGo, no WMI, no PowerShell. Direct Win32 syscalls via <code>golang.org/x/sys/windows</code>. The web UI is vanilla JS, embedded into the binary with <code>embed.FS</code>. Ships as a single <code>wtm.exe</code> under ~12 MB.</p>
+
+      <h3>Author</h3>
+      <p>Built by <strong>Ersin Koç</strong>.</p>
+      <ul class="about-links">
+        <li><a href="https://github.com/ersinkoc/WindowsTaskManager" target="_blank" rel="noopener">github.com/ersinkoc/WindowsTaskManager</a> — source, issues, releases</li>
+        <li><a href="https://github.com/ersinkoc" target="_blank" rel="noopener">github.com/ersinkoc</a> — more projects</li>
+      </ul>
+
+      <h3>License</h3>
+      <p>MIT. Bug reports and pull requests welcome.</p>
+    </article>
   </section>
 </main>
 

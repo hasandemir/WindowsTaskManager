@@ -51,6 +51,7 @@ func (s *Server) routes() {
 	// Anomaly endpoints.
 	s.router.GET("/api/v1/alerts", s.handleAlerts)
 	s.router.GET("/api/v1/alerts/history", s.handleAlertHistory)
+	s.router.POST("/api/v1/alerts/clear", s.handleAlertsClear)
 
 	// Config endpoints.
 	s.router.GET("/api/v1/config", s.handleConfigGet)
@@ -58,6 +59,7 @@ func (s *Server) routes() {
 	// AI advisor endpoints.
 	s.router.GET("/api/v1/ai/status", s.handleAIStatus)
 	s.router.POST("/api/v1/ai/analyze", s.handleAIAnalyze)
+	s.router.POST("/api/v1/ai/execute", s.handleAIExecute)
 	s.router.GET("/api/v1/ai/config", s.handleAIConfigGet)
 	s.router.POST("/api/v1/ai/config", s.handleAIConfigUpdate)
 	s.router.GET("/api/v1/ai/presets", s.handleAIPresets)
@@ -66,6 +68,10 @@ func (s *Server) routes() {
 	// User-defined automation rules.
 	s.router.GET("/api/v1/rules", s.handleRulesGet)
 	s.router.POST("/api/v1/rules", s.handleRulesUpdate)
+
+	// Per-process protect / ignore toggles.
+	s.router.POST("/api/v1/config/protect", s.handleConfigProtectToggle)
+	s.router.POST("/api/v1/config/ignore", s.handleConfigIgnoreToggle)
 
 	// SSE stream and embedded UI.
 	s.router.GET("/api/v1/stream", s.hub.Handler())
@@ -408,6 +414,14 @@ func (s *Server) handleAlertHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.alerts.History())
 }
 
+// handleAlertsClear wipes the active alert set without touching history.
+// The UI exposes this as a single "Clear" button so the user can recover
+// from a noisy burst without restarting the whole process.
+func (s *Server) handleAlertsClear(w http.ResponseWriter, r *http.Request) {
+	removed := s.alerts.ClearAll()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": removed})
+}
+
 func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	cfg := s.cfg
@@ -439,7 +453,10 @@ func (s *Server) handleAIAnalyze(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "ai_error", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"answer": resp})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"answer":  resp.Answer,
+		"actions": resp.Actions,
+	})
 }
 
 // ----- static UI handler -----

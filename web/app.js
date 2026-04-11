@@ -9,7 +9,8 @@ const state = {
   history: { cpu: [], mem: [] },
   maxHistory: 60,
   filter: "",
-  sort: "cpu",
+  sort: localStorage.getItem("wtm.sortCol") || "cpu",
+  sortDir: localStorage.getItem("wtm.sortDir") || "desc", // "asc" | "desc"
   activeTab: "overview",
   // Minimum ms between full DOM re-renders. User-adjustable from the topbar.
   // 1000ms is comfortable on modest hardware; the SSE stream still comes at
@@ -18,6 +19,10 @@ const state = {
   renderPending: false,
   lastRender: 0,
   lastUpdate: 0,
+  // Mirror of the server config for UI decisions. Refreshed on every save and
+  // on boot. Lowercased for fast EqualFold-style checks on the process table.
+  protectedNames: new Set(),
+  ignoredNames: new Set(),
 };
 
 function fmtBytes(n) {
@@ -138,34 +143,139 @@ function renderProcesses(snap) {
   let procs = (snap.processes || []).slice();
   const filter = state.filter.toLowerCase();
   if (filter) procs = procs.filter((p) => p.name.toLowerCase().includes(filter));
+  const dir = state.sortDir === "asc" ? 1 : -1;
   procs.sort((a, b) => {
+    let cmp = 0;
     switch (state.sort) {
-      case "cpu": return b.cpu_percent - a.cpu_percent;
-      case "memory": return b.working_set - a.working_set;
-      case "name": return a.name.localeCompare(b.name);
-      case "pid": return a.pid - b.pid;
-      case "threads": return b.thread_count - a.thread_count;
+      case "cpu": cmp = a.cpu_percent - b.cpu_percent; break;
+      case "memory": cmp = a.working_set - b.working_set; break;
+      case "name": cmp = a.name.localeCompare(b.name); break;
+      case "pid": cmp = a.pid - b.pid; break;
+      case "threads": cmp = a.thread_count - b.thread_count; break;
     }
-    return 0;
+    return cmp * dir;
   });
+  updateSortIndicators();
   procs = procs.slice(0, 250);
   const tbody = $("#proc-body");
   clear(tbody);
   for (const p of procs) {
+    const nameLower = (p.name || "").toLowerCase();
+    const isProtected = state.protectedNames.has(nameLower);
+    const isIgnored = state.ignoredNames.has(nameLower);
+    const isCritical = !!p.is_critical;
+    const noTouch = isCritical || isProtected;
+
+    const flagsCell = el("td", { class: "flags" });
+    if (isCritical) flagsCell.appendChild(el("span", { class: "flag crit", title: "Windows critical process" }, "⚠"));
+    if (isProtected) flagsCell.appendChild(el("span", { class: "flag prot", title: "Protected — kill/suspend disabled" }, "🛡"));
+    if (isIgnored) flagsCell.appendChild(el("span", { class: "flag ign", title: "Ignored by anomaly detectors" }, "🔕"));
+
     const actions = el("td", { class: "actions" });
     for (const act of ["kill", "suspend", "resume"]) {
-      actions.appendChild(el("button", { dataset: { act, pid: String(p.pid) } }, act[0].toUpperCase() + act.slice(1)));
+      const disabled = noTouch && (act === "kill" || act === "suspend");
+      const btnAttrs = { dataset: { act, pid: String(p.pid), name: p.name || "" } };
+      if (disabled) {
+        btnAttrs.disabled = "";
+        btnAttrs.title = isCritical ? "Windows system process — not allowed" : "Protected — remove from protect list to enable";
+      }
+      actions.appendChild(el("button", btnAttrs, act[0].toUpperCase() + act.slice(1)));
     }
-    tbody.appendChild(el("tr", null,
+    actions.appendChild(el("button", {
+      class: isProtected ? "toggle on" : "toggle",
+      dataset: { act: "protect", name: p.name || "", on: isProtected ? "1" : "0" },
+      title: isProtected ? "Remove from protect list" : "Prevent kill/suspend for this name",
+    }, isProtected ? "🛡 on" : "🛡"));
+    actions.appendChild(el("button", {
+      class: isIgnored ? "toggle on" : "toggle",
+      dataset: { act: "ignore", name: p.name || "", on: isIgnored ? "1" : "0" },
+      title: isIgnored ? "Remove from anomaly ignore list" : "Silence anomaly alerts for this name",
+    }, isIgnored ? "🔕 on" : "🔕"));
+
+    tbody.appendChild(el("tr", { class: noTouch ? "no-touch" : "" },
       el("td", null, String(p.pid)),
       el("td", null, p.name),
       el("td", null, p.cpu_percent.toFixed(1)),
       el("td", null, fmtBytes(p.working_set)),
       el("td", null, String(p.thread_count)),
-      el("td", null, p.is_critical ? "critical" : (p.status || "")),
+      flagsCell,
       actions,
     ));
   }
+}
+
+// setSort updates the active sort column + direction. Clicking the same
+// column toggles asc/desc; clicking a different column snaps to the sensible
+// default for that column (name/pid → asc, numeric → desc) so the first
+// click always shows what the user probably wanted.
+function setSort(col) {
+  if (state.sort === col) {
+    state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
+  } else {
+    state.sort = col;
+    state.sortDir = (col === "name" || col === "pid") ? "asc" : "desc";
+  }
+  localStorage.setItem("wtm.sortCol", state.sort);
+  localStorage.setItem("wtm.sortDir", state.sortDir);
+  const sel = $("#proc-sort");
+  if (sel) sel.value = state.sort;
+  if (state.snapshot) renderProcesses(state.snapshot);
+}
+
+function updateSortIndicators() {
+  const arrow = state.sortDir === "asc" ? "▲" : "▼";
+  $$(".proc-table th.sortable").forEach((th) => {
+    const ind = th.querySelector(".sort-ind");
+    if (!ind) return;
+    if (th.dataset.sort === state.sort) {
+      ind.textContent = arrow;
+      th.classList.add("active");
+    } else {
+      ind.textContent = "";
+      th.classList.remove("active");
+    }
+  });
+}
+
+async function loadConfig() {
+  try {
+    const c = await fetch("/api/v1/config").then((r) => r.json());
+    const prot = (c && c.Controller && c.Controller.ProtectedProcesses) || [];
+    const ign = (c && c.Anomaly && c.Anomaly.IgnoreProcesses) || [];
+    state.protectedNames = new Set(prot.map((x) => String(x).toLowerCase()));
+    state.ignoredNames = new Set(ign.map((x) => String(x).toLowerCase()));
+    if (state.snapshot && state.activeTab === "processes") renderProcesses(state.snapshot);
+  } catch (e) { /* ignore */ }
+}
+
+async function toggleProtect(name, on) {
+  try {
+    const r = await fetch("/api/v1/config/protect", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, protect: on }),
+    });
+    if (!r.ok) {
+      const b = await r.json().catch(() => ({}));
+      alert((b.error && b.error.message) || r.statusText);
+      return;
+    }
+    await loadConfig();
+  } catch (e) { alert(e.message); }
+}
+
+async function toggleIgnore(name, on) {
+  try {
+    const r = await fetch("/api/v1/config/ignore", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, ignore: on }),
+    });
+    if (!r.ok) {
+      const b = await r.json().catch(() => ({}));
+      alert((b.error && b.error.message) || r.statusText);
+      return;
+    }
+    await loadConfig();
+  } catch (e) { alert(e.message); }
 }
 
 function renderTree(snap) {
@@ -220,6 +330,18 @@ function renderDisks(snap) {
       el("div", { class: "bar" }, fill),
     ));
   }
+}
+
+async function clearAllAlerts() {
+  try {
+    const r = await fetch("/api/v1/alerts/clear", { method: "POST" });
+    if (!r.ok) {
+      const b = await r.json().catch(() => ({}));
+      alert((b.error && b.error.message) || r.statusText);
+      return;
+    }
+    loadAlerts();
+  } catch (e) { alert(e.message); }
 }
 
 async function loadAlerts() {
@@ -455,7 +577,6 @@ async function loadAIConfig() {
       state.textContent = "(no key set)";
       $("#ai-apikey").placeholder = "paste key";
     }
-    $("#ai-language").value = c.language || "tr";
     $("#ai-maxtokens").value = c.max_tokens || 1024;
     $("#ai-rpm").value = c.max_requests_per_minute || 5;
     $("#ai-headers").value = headersToText(c.extra_headers);
@@ -571,7 +692,7 @@ async function saveAIConfig() {
     endpoint: $("#ai-endpoint").value.trim(),
     model: $("#ai-model").value.trim(),
     api_key: $("#ai-apikey").value, // empty = keep current
-    language: $("#ai-language").value,
+    language: "en",
     max_tokens: parseInt($("#ai-maxtokens").value, 10) || 0,
     max_requests_per_minute: parseInt($("#ai-rpm").value, 10) || 0,
     extra_headers: textToHeaders($("#ai-headers").value),
@@ -607,6 +728,7 @@ async function saveAIConfig() {
 async function sendAI() {
   const promptText = $("#ai-prompt").value.trim();
   $("#ai-answer").textContent = "thinking…";
+  clear($("#ai-actions"));
   try {
     const r = await fetch("/api/v1/ai/analyze", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -615,10 +737,84 @@ async function sendAI() {
     const body = await r.json();
     if (!r.ok) throw new Error((body.error && body.error.message) || r.statusText);
     $("#ai-answer").textContent = body.answer || "(empty)";
+    renderAIActions(body.actions || []);
     loadAIStatus();
   } catch (e) {
     $("#ai-answer").textContent = `error: ${e.message}`;
   }
+}
+
+function renderAIActions(actions) {
+  const wrap = $("#ai-actions");
+  clear(wrap);
+  if (!actions || actions.length === 0) return;
+  wrap.appendChild(el("h3", null, `Suggested actions (${actions.length})`));
+  wrap.appendChild(el("p", { class: "muted" }, "Nothing runs until you approve it. System processes cannot be killed — use Protect instead."));
+  for (const sug of actions) {
+    wrap.appendChild(renderAIActionCard(sug));
+  }
+}
+
+function renderAIActionCard(sug) {
+  const type = String(sug.type || "").toLowerCase();
+  const card = el("div", { class: `ai-action-card type-${type}` });
+  const header = el("div", { class: "ai-action-head" });
+  header.appendChild(el("span", { class: `ai-action-type t-${type}` }, type));
+  const targetText = sug.pid
+    ? `${sug.name || "?"} (PID ${sug.pid})`
+    : (sug.name || (sug.rule && sug.rule.name) || "—");
+  header.appendChild(el("span", { class: "ai-action-target" }, targetText));
+  card.appendChild(header);
+
+  if (sug.reason) {
+    card.appendChild(el("div", { class: "ai-action-reason" }, sug.reason));
+  }
+
+  if (type === "add_rule" && sug.rule) {
+    const r = sug.rule;
+    const forSec = r.for_seconds || r.for || 0;
+    const desc = `match=${r.match || "?"} ${r.metric || "?"} ${r.op || ">="} ${r.threshold || 0} for ${forSec}s → ${r.action || "alert"}`;
+    card.appendChild(el("div", { class: "ai-action-rule" }, desc));
+  }
+
+  const pidNameLower = (sug.name || "").toLowerCase();
+  const protectedByUI = state.protectedNames.has(pidNameLower);
+  const controls = el("div", { class: "ai-action-controls" });
+
+  const approveBtn = el("button", { class: "ai-action-approve" }, "Approve");
+  if ((type === "kill" || type === "suspend") && protectedByUI) {
+    approveBtn.disabled = true;
+    approveBtn.title = "Target is on the protect list — remove it first";
+  }
+  approveBtn.addEventListener("click", async () => {
+    approveBtn.disabled = true;
+    approveBtn.textContent = "running…";
+    try {
+      const r = await fetch("/api/v1/ai/execute", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(sug),
+      });
+      const body = await r.json();
+      if (!r.ok) throw new Error((body.error && body.error.message) || r.statusText);
+      approveBtn.textContent = "✓ done";
+      card.classList.add("done");
+      if (type === "protect" || type === "ignore" || type === "add_rule") {
+        loadConfig();
+      }
+    } catch (e) {
+      approveBtn.disabled = false;
+      approveBtn.textContent = "Approve";
+      alert(`error: ${e.message}`);
+    }
+  });
+  controls.appendChild(approveBtn);
+
+  const dismissBtn = el("button", { class: "ai-action-dismiss" }, "Dismiss");
+  dismissBtn.addEventListener("click", () => card.remove());
+  controls.appendChild(dismissBtn);
+  card.appendChild(controls);
+
+  return card;
 }
 
 // ----- process actions -----
@@ -706,14 +902,28 @@ async function bootstrap() {
     state.filter = e.target.value;
     if (state.snapshot) renderProcesses(state.snapshot);
   });
+  $("#proc-sort").value = state.sort;
   $("#proc-sort").addEventListener("change", (e) => {
     state.sort = e.target.value;
+    localStorage.setItem("wtm.sortCol", state.sort);
     if (state.snapshot) renderProcesses(state.snapshot);
+  });
+  $$(".proc-table th.sortable").forEach((th) => {
+    th.addEventListener("click", () => setSort(th.dataset.sort));
   });
   $("#proc-body").addEventListener("click", (e) => {
     const btn = e.target.closest("button");
-    if (!btn) return;
-    processAction(btn.dataset.act, parseInt(btn.dataset.pid, 10));
+    if (!btn || btn.disabled) return;
+    const act = btn.dataset.act;
+    if (act === "protect") {
+      toggleProtect(btn.dataset.name, btn.dataset.on !== "1");
+      return;
+    }
+    if (act === "ignore") {
+      toggleIgnore(btn.dataset.name, btn.dataset.on !== "1");
+      return;
+    }
+    processAction(act, parseInt(btn.dataset.pid, 10));
   });
   $("#ai-send").addEventListener("click", sendAI);
   $("#ai-save").addEventListener("click", saveAIConfig);
@@ -728,6 +938,7 @@ async function bootstrap() {
 
   $("#rules-add").addEventListener("click", addRule);
   $("#rules-save").addEventListener("click", saveRules);
+  $("#alerts-clear").addEventListener("click", clearAllAlerts);
   $("#ai-provider").addEventListener("change", refreshModelDatalist);
   $("#ai-model").addEventListener("change", (e) => applyModelEndpoint(e.target.value));
   $("#ai-pill").addEventListener("click", () => {
@@ -741,6 +952,7 @@ async function bootstrap() {
     const snap = await fetch("/api/v1/system").then((r) => r.json());
     applySnapshot(snap);
   } catch (e) { /* ignore */ }
+  loadConfig();
   loadAlerts();
   loadRules();
   loadAIPresets().then(loadAIConfig);
@@ -748,6 +960,7 @@ async function bootstrap() {
   loadAIStatus();
   setInterval(loadAlerts, 5000);
   setInterval(loadAIStatus, 10000);
+  setInterval(loadConfig, 15000);
   setupSSE();
 }
 

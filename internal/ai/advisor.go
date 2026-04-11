@@ -94,13 +94,14 @@ func (a *Advisor) Status() map[string]any {
 
 // Analyze runs an LLM call. The user-supplied question is appended to a
 // snapshot+alerts context. Cached responses are returned without making
-// an HTTP call.
-func (a *Advisor) Analyze(ctx context.Context, userQuestion string) (string, error) {
+// an HTTP call. The returned AnalyzeResult carries both the prose answer
+// (with any <actions> block stripped) and the parsed structured actions.
+func (a *Advisor) Analyze(ctx context.Context, userQuestion string) (*AnalyzeResult, error) {
 	a.mu.RLock()
 	cfg := a.cfg
 	a.mu.RUnlock()
 	if !cfg.AI.Enabled || cfg.AI.APIKey == "" {
-		return "", errors.New("AI advisor disabled")
+		return nil, errors.New("AI advisor disabled")
 	}
 
 	snap := a.store.Latest()
@@ -114,11 +115,12 @@ func (a *Advisor) Analyze(ctx context.Context, userQuestion string) (string, err
 		a.mu.Lock()
 		a.totalCacheHits++
 		a.mu.Unlock()
-		return cached, nil
+		cleaned, actions := parseActionsBlock(cached)
+		return &AnalyzeResult{Answer: cleaned, Actions: actions}, nil
 	}
 
 	if !a.rl.Take() {
-		return "", errors.New("AI rate limit exceeded; try again later")
+		return nil, errors.New("AI rate limit exceeded; try again later")
 	}
 
 	answer, err := a.callProvider(ctx, cfg, prompt)
@@ -132,11 +134,12 @@ func (a *Advisor) Analyze(ctx context.Context, userQuestion string) (string, err
 	}
 	a.mu.Unlock()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	a.cache.Set(prompt, answer)
-	return answer, nil
+	cleaned, actions := parseActionsBlock(answer)
+	return &AnalyzeResult{Answer: cleaned, Actions: actions}, nil
 }
 
 // callProvider dispatches the LLM call based on cfg.AI.Provider.

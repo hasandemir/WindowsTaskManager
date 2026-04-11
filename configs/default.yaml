@@ -110,7 +110,7 @@ ai:
   auto_analyze_on_critical: true
   max_tokens: 1024
   max_requests_per_minute: 5
-  language: tr
+  language: en
   include_process_tree: true
   include_port_map: true
   history_context_duration: 5m

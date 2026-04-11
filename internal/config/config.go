@@ -5,8 +5,18 @@ import (
 	"time"
 )
 
+// CurrentSchemaVersion is bumped whenever we ship a breaking defaults change
+// that should be forced onto existing user configs. Loader checks this after
+// unmarshal and resets the relevant sections to the new defaults.
+//
+//	1 — original layout
+//	2 — turn off hung/orphan/port/network detectors by default; only real
+//	    dangers (runaway CPU, memory leak, giant spawn storms) fire by default
+const CurrentSchemaVersion = 2
+
 // Config is the root configuration tree.
 type Config struct {
+	SchemaVersion  int                 `yaml:"schema_version"`
 	Server         ServerConfig        `yaml:"server"`
 	Monitoring     MonitoringConfig    `yaml:"monitoring"`
 	Controller     ControllerConfig    `yaml:"controller"`
@@ -161,6 +171,7 @@ type UIConfig struct {
 // DefaultConfig returns sensible defaults for all settings.
 func DefaultConfig() *Config {
 	return &Config{
+		SchemaVersion: CurrentSchemaVersion,
 		Server: ServerConfig{
 			Host:        "127.0.0.1",
 			Port:        19876,
@@ -183,7 +194,7 @@ func DefaultConfig() *Config {
 		},
 		Anomaly: AnomalyConfig{
 			AnalysisInterval: 2 * time.Second,
-			MaxActiveAlerts:  200,
+			MaxActiveAlerts:  100,
 			IgnoreProcesses: []string{
 				"System", "Registry", "Idle", "Memory Compression",
 				"smss.exe", "csrss.exe", "wininit.exe", "winlogon.exe",
@@ -194,12 +205,15 @@ func DefaultConfig() *Config {
 				"spoolsv.exe", "MsMpEng.exe", "SecurityHealthService.exe",
 				"audiodg.exe", "conhost.exe", "dllhost.exe", "WmiPrvSE.exe",
 			},
+			// SpawnStorm: only fires on genuine fork bombs (50+ children/minute),
+			// and the detector itself has a hard-coded shell/browser whitelist.
 			SpawnStorm: SpawnStormConfig{
 				Enabled:              true,
-				MaxChildrenPerMinute: 20,
-				MaxTotalChildren:     50,
+				MaxChildrenPerMinute: 50,
+				MaxTotalChildren:     100,
 				Action:               "alert",
 			},
+			// MemoryLeak: statistical regression — high R² threshold keeps noise low.
 			MemoryLeak: MemoryLeakConfig{
 				Enabled:         true,
 				Window:          5 * time.Minute,
@@ -208,17 +222,22 @@ func DefaultConfig() *Config {
 				MemoryThreshold: "2GB",
 				Action:          "alert",
 			},
+			// HungProcess: OFF by default — on a real workstation most daemons
+			// sit idle for hours, and we have no window-message-pump data to
+			// distinguish them from actually frozen UIs. Users can opt in.
 			HungProcess: HungProcessConfig{
-				Enabled:               true,
+				Enabled:               false,
 				ZeroActivityThreshold: 120 * time.Second,
 				CriticalHungThreshold: 300 * time.Second,
 				IdleWhitelist:         []string{"SearchIndexer.exe", "spoolsv.exe"},
 				Action:                "alert",
 			},
+			// Orphan: OFF by default — most orphaned processes on Windows are
+			// benign detach patterns (installers, updaters, tray helpers).
 			Orphan: OrphanConfig{
-				Enabled:                 true,
-				ResourceThresholdCPU:    1,
-				ResourceThresholdMemory: "100MB",
+				Enabled:                 false,
+				ResourceThresholdCPU:    10,
+				ResourceThresholdMemory: "1GB",
 				Action:                  "alert",
 			},
 			RunawayCPU: RunawayCPUConfig{
@@ -228,21 +247,26 @@ func DefaultConfig() *Config {
 				CriticalDuration:  180 * time.Second,
 				Action:            "alert",
 			},
+			// PortConflict: OFF by default — a single TIME_WAIT/CLOSE_WAIT
+			// socket held for a few minutes is normal TCP housekeeping, not
+			// a conflict.
 			PortConflict: PortConflictConfig{
-				Enabled:            true,
+				Enabled:            false,
 				TimeWaitThreshold:  120 * time.Second,
 				CloseWaitThreshold: 60 * time.Second,
 				Action:             "alert",
 			},
+			// NetworkAnomaly: OFF by default — sigma-based burst detection is
+			// too noisy without a longer training window.
 			NetworkAnomaly: NetworkAnomalyConfig{
-				Enabled:              true,
+				Enabled:              false,
 				ConnectionSigma:      3,
 				MaxSystemConnections: 10000,
 				Action:               "alert",
 			},
 			NewProcess: NewProcessConfig{
-				Enabled:         true,
-				SuspiciousPaths: []string{"%TEMP%", "%USERPROFILE%\\Downloads"},
+				Enabled:         false,
+				SuspiciousPaths: []string{},
 				Action:          "info",
 			},
 		},
@@ -276,7 +300,7 @@ func DefaultConfig() *Config {
 			AutoAnalyzeOnCritical:  true,
 			MaxTokens:              1024,
 			MaxRequestsPerMinute:   5,
-			Language:               "tr",
+			Language:               "en",
 			IncludeProcessTree:     true,
 			IncludePortMap:         true,
 			HistoryContextDuration: 5 * time.Minute,

@@ -9,16 +9,39 @@ import (
 	"github.com/ersinkoc/WindowsTaskManager/internal/metrics"
 )
 
-// systemPromptTR is the Turkish persona instruction.
-const systemPromptTR = `Sen bir Windows sistem performans uzmanısın. Sana verilen anlık sistem
-durumunu ve aktif uyarıları analiz ederek kullanıcıya kısa, somut, eyleme
-yönelik öneriler sun. Maksimum 3-5 cümle. Spekülasyon yapma; veriden
-çıkarsama yap. Yanıtını Türkçe ver.`
+// actionsSchemaDoc is appended to every system prompt. It teaches the LLM how
+// to emit a structured actions block we can parse server-side into "suggested
+// operations" that the user then approves one by one from the dashboard.
+const actionsSchemaDoc = `
+
+When you recommend an operation the user could take, append a single
+<actions>...</actions> block at the very end of your reply containing a JSON
+array. Never put actions inside prose; only inside one <actions> block. Omit
+the block entirely when you have no concrete operation to suggest.
+
+Each item must be one of:
+  {"type":"kill","pid":<uint>,"name":"<exe>","reason":"<short>"}
+  {"type":"suspend","pid":<uint>,"name":"<exe>","reason":"<short>"}
+  {"type":"protect","name":"<exe>","reason":"<short>"}
+  {"type":"ignore","name":"<exe>","reason":"<short>"}
+  {"type":"add_rule","rule":{"name":"<id>","match":"<exe>","metric":"cpu_percent|memory_bytes|thread_count","op":">=|>|<=|<","threshold":<num>,"for_seconds":<int>,"action":"alert|kill|suspend","cooldown_seconds":<int>},"reason":"<short>"}
+
+Rules:
+- NEVER suggest kill or suspend for Windows system processes (svchost, csrss,
+  lsass, wininit, winlogon, services, smss, explorer, dwm, MsMpEng,
+  SecurityHealthService, RuntimeBroker, taskhostw, fontdrvhost, ctfmon,
+  sihost, SearchHost, SearchIndexer, StartMenuExperienceHost, ShellExperienceHost,
+  conhost, dllhost, WmiPrvSE, spoolsv, audiodg, System, Registry). For these,
+  suggest "protect" or "ignore" instead.
+- Always include PID when acting on a specific process.
+- Keep reasons under 80 chars.
+- Only recommend operations that are directly justified by the snapshot data.
+- Do not wrap the <actions> block in markdown fences.`
 
 // systemPromptEN is the English persona instruction.
 const systemPromptEN = `You are a Windows system performance expert. Given the current snapshot
 and active alerts, give the user concise, concrete, actionable advice in
-3-5 sentences max. No speculation; reason from data only.`
+3-5 sentences max. No speculation; reason from data only.` + actionsSchemaDoc
 
 // BuildPrompt assembles the user message that we send to the LLM.
 func BuildPrompt(language string, snap *metrics.SystemSnapshot, alerts []anomaly.Alert, includeTree, includePorts bool, userQuestion string) string {
@@ -101,18 +124,17 @@ func BuildPrompt(language string, snap *metrics.SystemSnapshot, alerts []anomaly
 		b.WriteString(userQuestion)
 		b.WriteByte('\n')
 	} else {
-		b.WriteString("\n## REQUEST\nKısa bir sağlık değerlendirmesi yap ve varsa risk gördüğün en önemli süreçleri açıkla.\n")
+		b.WriteString("\n## REQUEST\nGive a short health assessment and call out the most worrying processes, if any.\n")
 	}
 
 	return b.String()
 }
 
 // SystemPrompt returns the system prompt for the requested language.
-func SystemPrompt(language string) string {
-	if strings.ToLower(language) == "en" {
-		return systemPromptEN
-	}
-	return systemPromptTR
+// Only English is supported; the argument is kept for forward compatibility
+// with older callers that still pass a language hint.
+func SystemPrompt(_ string) string {
+	return systemPromptEN
 }
 
 func humanBytes(n uint64) string {

@@ -30,10 +30,52 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	// Schema migration. When we ship a breaking defaults change we bump
+	// CurrentSchemaVersion; on load we stamp in the new anomaly block so
+	// existing configs actually see the new defaults. We preserve the
+	// user's ignore list customisations since those are additive.
+	if cfg.SchemaVersion < CurrentSchemaVersion {
+		preservedIgnore := cfg.Anomaly.IgnoreProcesses
+		defaults := DefaultConfig()
+		cfg.Anomaly = defaults.Anomaly
+		if len(preservedIgnore) > 0 {
+			cfg.Anomaly.IgnoreProcesses = mergeUniqueFold(defaults.Anomaly.IgnoreProcesses, preservedIgnore)
+		}
+		cfg.SchemaVersion = CurrentSchemaVersion
+		_ = Save(path, cfg) // best-effort; loader stays green if the disk write fails
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
 	return cfg, nil
+}
+
+func mergeUniqueFold(base, extra []string) []string {
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, x := range base {
+		k := strings.ToLower(strings.TrimSpace(x))
+		if k == "" {
+			continue
+		}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, x)
+	}
+	for _, x := range extra {
+		k := strings.ToLower(strings.TrimSpace(x))
+		if k == "" {
+			continue
+		}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, x)
+	}
+	return out
 }
 
 // Save writes the config as YAML to the given path.

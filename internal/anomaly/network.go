@@ -60,8 +60,16 @@ func (d *NetworkAnomalyDetector) Analyze(ctx *AnalysisContext) {
 			d.stats[pid] = w
 		}
 		fcount := float64(count)
-		if w.Count() >= 10 && w.IsAnomaly(fcount, float64(cfg.ConnectionSigma)) && fcount > w.Mean()+1 {
+		// Require a meaningful absolute count before we call anything a
+		// burst — a process going from 5 to 15 connections on a dev box is
+		// routine traffic, not an anomaly.
+		const minBurstConnections = 30.0
+		if w.Count() >= 10 && fcount >= minBurstConnections && w.IsAnomaly(fcount, float64(cfg.ConnectionSigma)) && fcount > w.Mean()+1 {
 			procName := ctx.Snapshot.ProcessName(pid)
+			if isIgnoredProcess(ctx.Cfg, procName) {
+				w.Add(fcount)
+				continue
+			}
 			ctx.RaiseAlert(Alert{
 				Type:        d.Name(),
 				Severity:    SeverityWarning,

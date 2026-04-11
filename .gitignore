@@ -1,6 +1,8 @@
 # Build outputs
 /wtm.exe
 /wtm.exe.new
+/wtm-*.exe
+/wtm-*.exe.sha256
 /coverage.out
 /cover.out
 *.test

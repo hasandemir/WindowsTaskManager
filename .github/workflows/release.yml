@@ -40,6 +40,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Test
+        run: go test ./...
+
       - name: Build wtm.exe
         shell: pwsh
         run: |
@@ -47,13 +50,16 @@ jobs:
           $env:GOARCH = "amd64"
           $env:CGO_ENABLED = "0"
           $ldflags = "-s -w -H windowsgui -X main.version=${{ steps.ver.outputs.version }}"
-          go build -trimpath -ldflags $ldflags -o wtm.exe ./cmd/wtm
+          $exe = "wtm-${{ steps.ver.outputs.version }}-windows-amd64.exe"
+          go build -trimpath -ldflags $ldflags -o $exe ./cmd/wtm
 
       - name: Checksum
         shell: pwsh
         run: |
-          $h = (Get-FileHash wtm.exe -Algorithm SHA256).Hash.ToLower()
-          "$h  wtm.exe" | Out-File wtm.exe.sha256 -Encoding ascii
+          $exe = "wtm-${{ steps.ver.outputs.version }}-windows-amd64.exe"
+          $sha = "$exe.sha256"
+          $h = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          "$h  $exe" | Out-File $sha -Encoding ascii
           Write-Host "sha256: $h"
 
       - name: Upload build artifact
@@ -61,8 +67,8 @@ jobs:
         with:
           name: wtm-${{ steps.ver.outputs.version }}
           path: |
-            wtm.exe
-            wtm.exe.sha256
+            wtm-${{ steps.ver.outputs.version }}-windows-amd64.exe
+            wtm-${{ steps.ver.outputs.version }}-windows-amd64.exe.sha256
 
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -72,5 +78,5 @@ jobs:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
           files: |
-            wtm.exe
-            wtm.exe.sha256
+            wtm-${{ steps.ver.outputs.version }}-windows-amd64.exe
+            wtm-${{ steps.ver.outputs.version }}-windows-amd64.exe.sha256

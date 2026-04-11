@@ -104,19 +104,16 @@ func (e *Engine) Start(ctx context.Context) {
 }
 
 func (e *Engine) loop(ctx context.Context) {
-	interval := e.cfg.Anomaly.AnalysisInterval
-	if interval < 500*time.Millisecond {
-		interval = 2 * time.Second
-	}
-	t := time.NewTicker(interval)
-	defer t.Stop()
+	timer := time.NewTimer(e.analysisInterval())
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case <-timer.C:
 			e.analyzeOnce()
+			timer.Reset(e.analysisInterval())
 		}
 	}
 }
@@ -151,6 +148,20 @@ func (e *Engine) analyzeOnce() {
 func safeAnalyze(d Detector, actx *AnalysisContext) {
 	defer func() { _ = recover() }()
 	d.Analyze(actx)
+}
+
+func (e *Engine) analysisInterval() time.Duration {
+	e.mu.RLock()
+	cfg := e.cfg
+	e.mu.RUnlock()
+	interval := 2 * time.Second
+	if cfg != nil {
+		interval = cfg.Anomaly.AnalysisInterval
+	}
+	if interval < 500*time.Millisecond {
+		return 2 * time.Second
+	}
+	return interval
 }
 
 // raise is a helper used by detectors via AnalysisContext.RaiseAlert below.

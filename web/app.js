@@ -6,6 +6,7 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 const state = {
   snapshot: null,
+  selfPID: null,
   history: { cpu: [], mem: [] },
   maxHistory: 60,
   filter: "",
@@ -33,6 +34,12 @@ function fmtBytes(n) {
 }
 function fmtRate(bps) {
   return `${fmtBytes(bps)}/s`;
+}
+function fmtDateTime(v) {
+  if (!v) return "—";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString();
 }
 
 function el(tag, attrs, ...children) {
@@ -164,9 +171,11 @@ function renderProcesses(snap) {
     const isProtected = state.protectedNames.has(nameLower);
     const isIgnored = state.ignoredNames.has(nameLower);
     const isCritical = !!p.is_critical;
-    const noTouch = isCritical || isProtected;
+    const isSelf = state.selfPID != null && p.pid === state.selfPID;
+    const noTouch = isCritical || isProtected || isSelf;
 
     const flagsCell = el("td", { class: "flags" });
+    if (isSelf) flagsCell.appendChild(el("span", { class: "flag self", title: "Running Windows Task Manager process" }, "WTM"));
     if (isCritical) flagsCell.appendChild(el("span", { class: "flag crit", title: "Windows critical process" }, "⚠"));
     if (isProtected) flagsCell.appendChild(el("span", { class: "flag prot", title: "Protected — kill/suspend disabled" }, "🛡"));
     if (isIgnored) flagsCell.appendChild(el("span", { class: "flag ign", title: "Ignored by anomaly detectors" }, "🔕"));
@@ -177,7 +186,11 @@ function renderProcesses(snap) {
       const btnAttrs = { dataset: { act, pid: String(p.pid), name: p.name || "" } };
       if (disabled) {
         btnAttrs.disabled = "";
-        btnAttrs.title = isCritical ? "Windows system process — not allowed" : "Protected — remove from protect list to enable";
+        btnAttrs.title = isSelf
+          ? "WTM cannot kill or suspend its own running process"
+          : isCritical
+            ? "Windows system process — not allowed"
+            : "Protected — remove from protect list to enable";
       }
       actions.appendChild(el("button", btnAttrs, act[0].toUpperCase() + act.slice(1)));
     }
@@ -513,6 +526,21 @@ async function saveRules() {
 let aiPresets = [];
 let aiModels = [];
 
+function textToChatIDs(text) {
+  const out = [];
+  for (const raw of text.split(/\r?\n|,/)) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const n = Number(trimmed);
+    if (Number.isInteger(n)) out.push(n);
+  }
+  return out;
+}
+
+function chatIDsToText(ids) {
+  return (ids || []).map((x) => String(x)).join("\n");
+}
+
 async function loadAIStatus() {
   try {
     const s = await fetch("/api/v1/ai/status").then((r) => r.json());
@@ -532,6 +560,90 @@ async function loadAIStatus() {
   }
 }
 
+async function loadAIWatch() {
+  try {
+    const s = await fetch("/api/v1/ai/watch").then((r) => r.json());
+    renderAIWatch(s || {});
+  } catch (e) {
+    $("#ai-watch-summary").textContent = "Background watch unavailable";
+  }
+}
+
+function renderAIWatch(state) {
+  const pill = $("#ai-watch-pill");
+  const summary = $("#ai-watch-summary");
+  const answer = $("#ai-watch-answer");
+  const runs = $("#ai-watch-runs");
+
+  const enabled = !!state.enabled;
+  const configured = !!state.configured;
+  const inFlight = !!state.in_flight;
+  const budget = state.budget || {};
+  let pillText = "disabled";
+  let pillClass = "badge offline";
+  if (enabled && configured) {
+    pillText = inFlight ? "running" : "armed";
+    pillClass = "badge online";
+  } else if (enabled && !configured) {
+    pillText = "no key";
+    pillClass = "badge ai-pill disabled";
+  }
+  pill.textContent = pillText;
+  pill.className = pillClass;
+
+  const parts = [];
+  if (!enabled) parts.push("Scheduler disabled");
+  else if (!configured) parts.push("Scheduler enabled but AI is not configured");
+  else parts.push("Critical alerts trigger a background AI pass");
+  if (state.auto_action_enabled) {
+    parts.push(state.auto_action_dry_run ? "auto-action policy: dry-run" : "auto-action policy: live mode requested");
+  } else {
+    parts.push("auto-action policy disabled");
+  }
+  parts.push(`cycles ${budget.cycles_last_hour || 0}/${budget.max_cycles_per_hour || 0} this hour`);
+  parts.push(`tokens ${budget.reserved_tokens_today || 0}/${budget.max_reserved_tokens_per_day || 0} reserved today`);
+  if (state.last_skip_reason) parts.push(`last skip: ${state.last_skip_reason}`);
+  if (state.last_error) parts.push(`last error: ${state.last_error}`);
+  summary.textContent = parts.join(" • ");
+
+  const lastRun = state.last_run;
+  if (lastRun && lastRun.answer) {
+    answer.textContent = lastRun.answer;
+    answer.hidden = false;
+  } else {
+    answer.textContent = "No completed background analysis yet.";
+    answer.hidden = false;
+  }
+
+  renderAIActionsIn($("#ai-watch-actions"), lastRun && lastRun.actions, "Background suggestions");
+
+  clear(runs);
+  const items = (state.recent_runs || []).slice().reverse();
+  if (items.length === 0) {
+    runs.appendChild(el("li", { class: "muted" }, "No background runs recorded."));
+    return;
+  }
+  for (const run of items) {
+    const title = run.alert_title || run.alert_type || run.trigger || "background run";
+    const status = run.error
+      ? `error: ${run.error}`
+      : `${run.actions ? run.actions.length : 0} action(s), ${run.auto_candidates || 0} dry-run candidate(s)`;
+    const meta = [
+      `started ${fmtDateTime(run.started_at)}`,
+      run.cached ? "cache hit" : `reserved ${run.reserved_tokens || 0} tokens`,
+      run.alert_process ? `process ${run.alert_process}` : "",
+      run.alert_pid ? `PID ${run.alert_pid}` : "",
+    ].filter(Boolean).join(" • ");
+    runs.appendChild(el("li", null,
+      el("div", { class: "run-head" },
+        el("strong", null, title),
+        el("span", { class: "muted" }, status),
+      ),
+      el("div", { class: "run-meta" }, meta),
+    ));
+  }
+}
+
 function updateAIPill(s) {
   const pill = $("#ai-pill");
   if (!pill) return;
@@ -543,6 +655,14 @@ function updateAIPill(s) {
   pill.title = s.enabled
     ? `${provider} (${s.configured ? "configured" : "no key"}) — click to open AI tab`
     : "AI advisor disabled — click to configure";
+}
+
+async function loadInfo() {
+  try {
+    const info = await fetch("/api/v1/info").then((r) => r.json());
+    state.selfPID = Number.isInteger(info.self_pid) ? info.self_pid : null;
+    if (state.snapshot && state.activeTab === "processes") renderProcesses(state.snapshot);
+  } catch (e) { /* ignore */ }
 }
 
 async function loadAIPresets() {
@@ -595,6 +715,63 @@ async function loadAIModels() {
     }
     refreshModelDatalist();
   } catch (e) { /* ignore */ }
+}
+
+async function loadTelegramConfig() {
+  try {
+    const c = await fetch("/api/v1/telegram/config").then((r) => r.json());
+    $("#tg-enabled").checked = !!c.enabled;
+    $("#tg-api-base").value = c.api_base_url || "https://api.telegram.org";
+    $("#tg-chat-ids").value = chatIDsToText(c.allowed_chat_ids || []);
+    $("#tg-poll-timeout").value = c.poll_timeout_sec || 25;
+    $("#tg-confirm-ttl").value = c.confirm_ttl_sec || 90;
+    $("#tg-notify-critical").checked = c.notify_on_critical !== false;
+    $("#tg-require-confirm").checked = c.require_confirm !== false;
+    if (c.bot_token && document.activeElement !== $("#tg-token")) {
+      $("#tg-token").value = "";
+    }
+    const state = $("#tg-token-state");
+    if (c.bot_token) {
+      state.textContent = `(current: ${c.bot_token} — leave blank to keep)`;
+      $("#tg-token").placeholder = "leave blank to keep current";
+    } else {
+      state.textContent = "(no token set)";
+      $("#tg-token").placeholder = "123456:ABC...";
+    }
+  } catch (e) { /* ignore */ }
+}
+
+async function saveTelegramConfig() {
+  const msg = $("#tg-save-msg");
+  const body = {
+    enabled: $("#tg-enabled").checked,
+    bot_token: $("#tg-token").value,
+    api_base_url: $("#tg-api-base").value.trim(),
+    allowed_chat_ids: textToChatIDs($("#tg-chat-ids").value),
+    poll_timeout_sec: parseInt($("#tg-poll-timeout").value, 10) || 25,
+    notify_on_critical: $("#tg-notify-critical").checked,
+    require_confirm: $("#tg-require-confirm").checked,
+    confirm_ttl_sec: parseInt($("#tg-confirm-ttl").value, 10) || 90,
+  };
+  msg.textContent = "saving…";
+  msg.style.color = "";
+  try {
+    const r = await fetch("/api/v1/telegram/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error((data.error && data.error.message) || r.statusText);
+    msg.textContent = `✓ saved at ${new Date().toLocaleTimeString()}`;
+    msg.style.color = "var(--ok)";
+    $("#tg-token").blur();
+    $("#tg-token").value = "";
+    loadTelegramConfig();
+  } catch (e) {
+    msg.textContent = `✗ error: ${e.message}`;
+    msg.style.color = "var(--crit)";
+  }
 }
 
 function refreshModelDatalist() {
@@ -737,18 +914,18 @@ async function sendAI() {
     const body = await r.json();
     if (!r.ok) throw new Error((body.error && body.error.message) || r.statusText);
     $("#ai-answer").textContent = body.answer || "(empty)";
-    renderAIActions(body.actions || []);
+    renderAIActionsIn($("#ai-actions"), body.actions || [], "Suggested actions");
     loadAIStatus();
   } catch (e) {
     $("#ai-answer").textContent = `error: ${e.message}`;
   }
 }
 
-function renderAIActions(actions) {
-  const wrap = $("#ai-actions");
+function renderAIActionsIn(wrap, actions, title) {
+  if (!wrap) return;
   clear(wrap);
   if (!actions || actions.length === 0) return;
-  wrap.appendChild(el("h3", null, `Suggested actions (${actions.length})`));
+  wrap.appendChild(el("h3", null, `${title} (${actions.length})`));
   wrap.appendChild(el("p", { class: "muted" }, "Nothing runs until you approve it. System processes cannot be killed — use Protect instead."));
   for (const sug of actions) {
     wrap.appendChild(renderAIActionCard(sug));
@@ -777,14 +954,29 @@ function renderAIActionCard(sug) {
     card.appendChild(el("div", { class: "ai-action-rule" }, desc));
   }
 
+  if (sug.policy && sug.policy.status) {
+    const p = sug.policy;
+    let label = p.status;
+    if (p.status === "needs_repeat") {
+      label = `needs repeat ${p.repeat_count || 0}/${p.required_repeat_count || 0}`;
+    } else if (p.status === "dry_run_eligible") {
+      label = "dry-run eligible";
+    }
+    const reason = p.reason ? ` • ${p.reason}` : "";
+    card.appendChild(el("div", { class: `ai-action-policy ${p.status}` }, `${label}${reason}`));
+  }
+
   const pidNameLower = (sug.name || "").toLowerCase();
   const protectedByUI = state.protectedNames.has(pidNameLower);
+  const targetsSelf = state.selfPID != null && Number(sug.pid || 0) === state.selfPID;
   const controls = el("div", { class: "ai-action-controls" });
 
   const approveBtn = el("button", { class: "ai-action-approve" }, "Approve");
-  if ((type === "kill" || type === "suspend") && protectedByUI) {
+  if ((type === "kill" || type === "suspend") && (protectedByUI || targetsSelf)) {
     approveBtn.disabled = true;
-    approveBtn.title = "Target is on the protect list — remove it first";
+    approveBtn.title = targetsSelf
+      ? "WTM cannot approve kill/suspend against its own running process"
+      : "Target is on the protect list — remove it first";
   }
   approveBtn.addEventListener("click", async () => {
     approveBtn.disabled = true;
@@ -801,6 +993,7 @@ function renderAIActionCard(sug) {
       if (type === "protect" || type === "ignore" || type === "add_rule") {
         loadConfig();
       }
+      loadAIWatch();
     } catch (e) {
       approveBtn.disabled = false;
       approveBtn.textContent = "Approve";
@@ -878,6 +1071,7 @@ function setupSSE() {
   });
   es.addEventListener("anomaly.raised", () => { setConn(true); loadAlerts(); });
   es.addEventListener("anomaly.cleared", () => { setConn(true); loadAlerts(); });
+  es.addEventListener("ai.background", () => { setConn(true); loadAIWatch(); loadAIStatus(); });
   es.onerror = () => setConn(false);
 
   // Fallback poll: if the SSE stream is silent (bad middleware, proxy buffering,
@@ -927,6 +1121,7 @@ async function bootstrap() {
   });
   $("#ai-send").addEventListener("click", sendAI);
   $("#ai-save").addEventListener("click", saveAIConfig);
+  $("#tg-save").addEventListener("click", saveTelegramConfig);
   $("#ai-preset").addEventListener("change", (e) => applyPreset(e.target.value));
 
   const rateSel = $("#refresh-rate");
@@ -953,13 +1148,17 @@ async function bootstrap() {
     applySnapshot(snap);
   } catch (e) { /* ignore */ }
   loadConfig();
+  loadInfo();
   loadAlerts();
   loadRules();
   loadAIPresets().then(loadAIConfig);
   loadAIModels();
+  loadTelegramConfig();
   loadAIStatus();
+  loadAIWatch();
   setInterval(loadAlerts, 5000);
   setInterval(loadAIStatus, 10000);
+  setInterval(loadAIWatch, 10000);
   setInterval(loadConfig, 15000);
   setupSSE();
 }

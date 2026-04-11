@@ -3,6 +3,7 @@ package server
 import (
 	"io"
 	"net/http"
+	"os"
 	"path"
 	"runtime"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ersinkoc/WindowsTaskManager/internal/ai"
 	"github.com/ersinkoc/WindowsTaskManager/internal/controller"
 	"github.com/ersinkoc/WindowsTaskManager/internal/metrics"
 )
@@ -58,12 +60,15 @@ func (s *Server) routes() {
 
 	// AI advisor endpoints.
 	s.router.GET("/api/v1/ai/status", s.handleAIStatus)
+	s.router.GET("/api/v1/ai/watch", s.handleAIWatch)
 	s.router.POST("/api/v1/ai/analyze", s.handleAIAnalyze)
 	s.router.POST("/api/v1/ai/execute", s.handleAIExecute)
 	s.router.GET("/api/v1/ai/config", s.handleAIConfigGet)
 	s.router.POST("/api/v1/ai/config", s.handleAIConfigUpdate)
 	s.router.GET("/api/v1/ai/presets", s.handleAIPresets)
 	s.router.GET("/api/v1/ai/models", s.handleAIModels)
+	s.router.GET("/api/v1/telegram/config", s.handleTelegramConfigGet)
+	s.router.POST("/api/v1/telegram/config", s.handleTelegramConfigUpdate)
 
 	// User-defined automation rules.
 	s.router.GET("/api/v1/rules", s.handleRulesGet)
@@ -152,6 +157,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"go_version":      runtime.Version(),
 		"num_cpu":         runtime.NumCPU(),
 		"goroutines":      runtime.NumGoroutine(),
+		"self_pid":        os.Getpid(),
 		"interval_ms":     cfg.Monitoring.Interval.Milliseconds(),
 		"history_minutes": cfg.Monitoring.HistoryDuration.Minutes(),
 		"sse_clients":     s.hub.ClientCount(),
@@ -386,6 +392,8 @@ func (s *Server) controllerError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, "protected", err.Error())
 	case controller.ErrCritical:
 		writeError(w, http.StatusForbidden, "critical", err.Error())
+	case controller.ErrSelf:
+		writeError(w, http.StatusForbidden, "self_protected", err.Error())
 	case controller.ErrConfirmNeeded:
 		writeError(w, http.StatusConflict, "confirm_required", err.Error())
 	case controller.ErrNotFound:
@@ -424,9 +432,11 @@ func (s *Server) handleAlertsClear(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
-	cfg := s.cfg
+	current := *s.cfg
 	s.mu.RUnlock()
-	writeJSON(w, http.StatusOK, cfg)
+	current.AI.APIKey = maskSecret(current.AI.APIKey)
+	current.Telegram.BotToken = maskSecret(current.Telegram.BotToken)
+	writeJSON(w, http.StatusOK, &current)
 }
 
 func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
@@ -435,6 +445,14 @@ func (s *Server) handleAIStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.advisor.Status())
+}
+
+func (s *Server) handleAIWatch(w http.ResponseWriter, r *http.Request) {
+	if s.advisor == nil {
+		writeJSON(w, http.StatusOK, ai.BackgroundState{})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.advisor.BackgroundState())
 }
 
 func (s *Server) handleAIAnalyze(w http.ResponseWriter, r *http.Request) {

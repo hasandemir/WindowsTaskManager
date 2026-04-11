@@ -11,12 +11,23 @@ import (
 // Suggestion is one concrete operation the LLM proposes. The dashboard
 // renders these as approve-buttons; nothing executes until the user clicks.
 type Suggestion struct {
-	ID     string            `json:"id"`               // stable hash so the UI can dedupe
-	Type   string            `json:"type"`             // kill | suspend | protect | ignore | add_rule
-	PID    uint32            `json:"pid,omitempty"`    // required for kill/suspend
-	Name   string            `json:"name,omitempty"`   // executable name (used by protect/ignore)
-	Reason string            `json:"reason,omitempty"` // free-form, <=80 chars
-	Rule   *RuleSuggestion   `json:"rule,omitempty"`   // populated for add_rule suggestions
+	ID     string          `json:"id"`               // stable hash so the UI can dedupe
+	Type   string          `json:"type"`             // kill | suspend | protect | ignore | add_rule
+	PID    uint32          `json:"pid,omitempty"`    // required for kill/suspend
+	Name   string          `json:"name,omitempty"`   // executable name (used by protect/ignore)
+	Reason string          `json:"reason,omitempty"` // free-form, <=80 chars
+	Rule   *RuleSuggestion `json:"rule,omitempty"`   // populated for add_rule suggestions
+	Policy *AutoPolicy     `json:"policy,omitempty"` // background auto-action evaluation
+}
+
+// AutoPolicy explains whether a suggestion would qualify for future
+// background auto-execution. Phase 2 is still dry-run only: we surface
+// deterministic eligibility, but do not execute automatically yet.
+type AutoPolicy struct {
+	Status              string `json:"status"` // disabled | blocked | needs_repeat | dry_run_eligible
+	Reason              string `json:"reason,omitempty"`
+	RepeatCount         int    `json:"repeat_count,omitempty"`
+	RequiredRepeatCount int    `json:"required_repeat_count,omitempty"`
 }
 
 // RuleSuggestion is the wire shape for a rule proposed by the LLM. We keep
@@ -44,6 +55,7 @@ type RuleSuggestion struct {
 type AnalyzeResult struct {
 	Answer  string       `json:"answer"`
 	Actions []Suggestion `json:"actions,omitempty"`
+	Cached  bool         `json:"cached,omitempty"`
 }
 
 // parseActionsBlock scans `raw` for a single <actions>...</actions> block,

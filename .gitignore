@@ -1,0 +1,25 @@
+# Build outputs
+/wtm.exe
+/wtm.exe.new
+/coverage.out
+/cover.out
+*.test
+
+# Local runtime config
+/config.yaml
+/config.local.yaml
+.env
+.env.*
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+*.pid
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.vs/

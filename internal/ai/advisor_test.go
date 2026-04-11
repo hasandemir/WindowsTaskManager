@@ -12,6 +12,7 @@ import (
 
 	"github.com/ersinkoc/WindowsTaskManager/internal/anomaly"
 	"github.com/ersinkoc/WindowsTaskManager/internal/config"
+	"github.com/ersinkoc/WindowsTaskManager/internal/event"
 	"github.com/ersinkoc/WindowsTaskManager/internal/storage"
 )
 
@@ -87,7 +88,7 @@ func TestAnthropicCall(t *testing.T) {
 		MaxRequestsPerMinute: 60,
 		Language:             "en",
 	}}
-	a := NewAdvisor(cfg, storage.NewStore(60, 10), func() []anomaly.Alert { return nil })
+	a := NewAdvisor(cfg, storage.NewStore(60, 10), func() []anomaly.Alert { return nil }, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -140,7 +141,7 @@ func TestOpenAICall(t *testing.T) {
 		Language:             "en",
 		ExtraHeaders:         map[string]string{"HTTP-Referer": "http://wtm.local"},
 	}}
-	a := NewAdvisor(cfg, storage.NewStore(60, 10), func() []anomaly.Alert { return nil })
+	a := NewAdvisor(cfg, storage.NewStore(60, 10), func() []anomaly.Alert { return nil }, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -173,7 +174,7 @@ func TestOpenAICall(t *testing.T) {
 
 func TestAnalyzeDisabled(t *testing.T) {
 	cfg := &config.Config{AI: config.AIConfig{Enabled: false, MaxRequestsPerMinute: 5}}
-	a := NewAdvisor(cfg, storage.NewStore(60, 10), nil)
+	a := NewAdvisor(cfg, storage.NewStore(60, 10), nil, nil)
 	if _, err := a.Analyze(context.Background(), "x"); err == nil {
 		t.Error("expected error when disabled")
 	}
@@ -183,9 +184,184 @@ func TestUnknownProviderError(t *testing.T) {
 	cfg := &config.Config{AI: config.AIConfig{
 		Enabled: true, Provider: "ollama-rest", APIKey: "x", MaxRequestsPerMinute: 5,
 	}}
-	a := NewAdvisor(cfg, storage.NewStore(60, 10), nil)
+	a := NewAdvisor(cfg, storage.NewStore(60, 10), nil, nil)
 	_, err := a.Analyze(context.Background(), "x")
 	if err == nil || !strings.Contains(err.Error(), "unknown AI provider") {
 		t.Errorf("expected unknown provider error, got %v", err)
 	}
+}
+
+func TestBackgroundWatchRunsOnCriticalAlert(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"background diagnosis<actions>[{\"type\":\"ignore\",\"name\":\"node.exe\",\"reason\":\"known dev burst\"}]</actions>"}}]}`))
+	}))
+	defer srv.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.AI.Enabled = true
+	cfg.AI.Provider = "openai"
+	cfg.AI.APIKey = "sk-test"
+	cfg.AI.Endpoint = srv.URL
+	cfg.AI.MaxTokens = 256
+	cfg.AI.Scheduler.Enabled = true
+	cfg.AI.Scheduler.MinInterval = 0
+	cfg.AI.Scheduler.MaxCyclesPerHour = 5
+	cfg.AI.Scheduler.MaxReservedTokensPerDay = 5000
+	cfg.AI.Scheduler.CooldownAfterError = 0
+	cfg.AI.Scheduler.HistoryLimit = 4
+	cfg.AI.AutoAnalyzeOnCritical = true
+
+	em := event.NewEmitter()
+	a := NewAdvisor(cfg, storage.NewStore(60, 10), func() []anomaly.Alert { return nil }, em)
+
+	em.Emit(anomaly.EventAlertRaised, anomaly.Alert{
+		ID:          "runaway_cpu/123",
+		Type:        "runaway_cpu",
+		Severity:    anomaly.SeverityCritical,
+		Title:       "Runaway CPU",
+		Description: "node.exe is burning CPU",
+		PID:         123,
+		ProcessName: "node.exe",
+	})
+
+	waitFor(t, 2*time.Second, func() bool {
+		return a.BackgroundState().LastRun != nil
+	})
+
+	state := a.BackgroundState()
+	if state.LastRun == nil {
+		t.Fatal("expected a background run")
+	}
+	if state.LastRun.AlertType != "runaway_cpu" {
+		t.Fatalf("alert_type=%q want runaway_cpu", state.LastRun.AlertType)
+	}
+	if !strings.Contains(state.LastRun.Answer, "background diagnosis") {
+		t.Fatalf("answer=%q", state.LastRun.Answer)
+	}
+	if len(state.LastRun.Actions) != 1 || state.LastRun.Actions[0].Type != "ignore" {
+		t.Fatalf("actions=%+v", state.LastRun.Actions)
+	}
+}
+
+func TestBackgroundWatchHonorsCycleLimit(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	defer srv.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.AI.Enabled = true
+	cfg.AI.Provider = "openai"
+	cfg.AI.APIKey = "sk-test"
+	cfg.AI.Endpoint = srv.URL
+	cfg.AI.MaxTokens = 256
+	cfg.AI.Scheduler.Enabled = true
+	cfg.AI.Scheduler.MinInterval = 0
+	cfg.AI.Scheduler.MaxCyclesPerHour = 1
+	cfg.AI.Scheduler.MaxReservedTokensPerDay = 5000
+	cfg.AI.Scheduler.CooldownAfterError = 0
+	cfg.AI.AutoAnalyzeOnCritical = true
+
+	em := event.NewEmitter()
+	a := NewAdvisor(cfg, storage.NewStore(60, 10), func() []anomaly.Alert { return nil }, em)
+
+	first := anomaly.Alert{Type: "runaway_cpu", Severity: anomaly.SeverityCritical, Title: "first", PID: 1, ProcessName: "node.exe"}
+	second := anomaly.Alert{Type: "memory_leak", Severity: anomaly.SeverityCritical, Title: "second", PID: 2, ProcessName: "chrome.exe"}
+
+	em.Emit(anomaly.EventAlertRaised, first)
+	waitFor(t, 2*time.Second, func() bool {
+		return a.BackgroundState().LastRun != nil
+	})
+
+	em.Emit(anomaly.EventAlertRaised, second)
+	time.Sleep(100 * time.Millisecond)
+
+	state := a.BackgroundState()
+	if calls != 1 {
+		t.Fatalf("calls=%d want 1", calls)
+	}
+	if state.LastSkipReason != "cycle_limit" {
+		t.Fatalf("last_skip_reason=%q want cycle_limit", state.LastSkipReason)
+	}
+	if len(state.RecentRuns) != 1 {
+		t.Fatalf("recent_runs=%d want 1", len(state.RecentRuns))
+	}
+}
+
+func TestBackgroundWatchEvaluatesAutoPolicy(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok<actions>[{\"type\":\"ignore\",\"name\":\"node.exe\",\"reason\":\"known dev workload\"}]</actions>"}}]}`))
+	}))
+	defer srv.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.AI.Enabled = true
+	cfg.AI.Provider = "openai"
+	cfg.AI.APIKey = "sk-test"
+	cfg.AI.Endpoint = srv.URL
+	cfg.AI.MaxTokens = 256
+	cfg.AI.Scheduler.Enabled = true
+	cfg.AI.Scheduler.MinInterval = 0
+	cfg.AI.Scheduler.MaxCyclesPerHour = 5
+	cfg.AI.Scheduler.MaxReservedTokensPerDay = 5000
+	cfg.AI.Scheduler.CooldownAfterError = 0
+	cfg.AI.AutoAnalyzeOnCritical = true
+	cfg.AI.AutoAction.Enabled = true
+	cfg.AI.AutoAction.DryRun = true
+	cfg.AI.AutoAction.AllowedActions = []string{"ignore"}
+	cfg.AI.AutoAction.RequireRepeatCycles = 2
+
+	em := event.NewEmitter()
+	a := NewAdvisor(cfg, storage.NewStore(60, 10), func() []anomaly.Alert { return nil }, em)
+
+	alert := anomaly.Alert{Type: "runaway_cpu", Severity: anomaly.SeverityCritical, Title: "cpu", PID: 123, ProcessName: "node.exe"}
+
+	em.Emit(anomaly.EventAlertRaised, alert)
+	waitFor(t, 2*time.Second, func() bool {
+		return len(a.BackgroundState().RecentRuns) >= 1
+	})
+
+	first := a.BackgroundState().LastRun
+	if first == nil || len(first.Actions) != 1 || first.Actions[0].Policy == nil {
+		t.Fatalf("first run policy missing: %+v", first)
+	}
+	if first.Actions[0].Policy.Status != "needs_repeat" {
+		t.Fatalf("first policy=%+v want needs_repeat", first.Actions[0].Policy)
+	}
+
+	em.Emit(anomaly.EventAlertRaised, alert)
+	waitFor(t, 2*time.Second, func() bool {
+		state := a.BackgroundState()
+		return len(state.RecentRuns) >= 2
+	})
+
+	second := a.BackgroundState().LastRun
+	if second == nil || len(second.Actions) != 1 || second.Actions[0].Policy == nil {
+		t.Fatalf("second run policy missing: %+v", second)
+	}
+	if second.Actions[0].Policy.Status != "dry_run_eligible" {
+		t.Fatalf("second policy=%+v want dry_run_eligible", second.Actions[0].Policy)
+	}
+	if second.AutoCandidates != 1 {
+		t.Fatalf("auto_candidates=%d want 1", second.AutoCandidates)
+	}
+	if calls < 1 {
+		t.Fatalf("calls=%d want >=1", calls)
+	}
+}
+
+func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("timeout waiting for condition")
 }

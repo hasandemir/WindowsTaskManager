@@ -62,7 +62,7 @@ var aiPresets = []aiPreset{
 		Label:      "OpenAI GPT",
 		Provider:   "openai",
 		Endpoint:   "https://api.openai.com/v1/chat/completions",
-		Model:      "gpt-4o-mini",
+		Model:      "gpt-5-mini",
 		APIKeyHint: "sk-...",
 	},
 	{
@@ -70,13 +70,13 @@ var aiPresets = []aiPreset{
 		Label:      "OpenRouter (multi-model)",
 		Provider:   "openai",
 		Endpoint:   "https://openrouter.ai/api/v1/chat/completions",
-		Model:      "anthropic/claude-3.5-sonnet",
+		Model:      "openrouter/auto",
 		APIKeyHint: "sk-or-v1-...",
 		ExtraHeaders: map[string]string{
 			"HTTP-Referer": "http://localhost",
 			"X-Title":      "WTM",
 		},
-		Notes: "Single key, hundreds of models. Browse https://openrouter.ai/models",
+		Notes: "Single key, hundreds of models. openrouter/auto routes to current top models; browse https://openrouter.ai/models for explicit picks.",
 	},
 	{
 		ID:         "groq",
@@ -99,7 +99,7 @@ var aiPresets = []aiPreset{
 		Label:      "Together AI",
 		Provider:   "openai",
 		Endpoint:   "https://api.together.xyz/v1/chat/completions",
-		Model:      "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+		Model:      "moonshotai/Kimi-K2.5",
 		APIKeyHint: "...",
 	},
 	{
@@ -107,7 +107,7 @@ var aiPresets = []aiPreset{
 		Label:      "Mistral La Plateforme",
 		Provider:   "openai",
 		Endpoint:   "https://api.mistral.ai/v1/chat/completions",
-		Model:      "mistral-large-latest",
+		Model:      "mistral-medium-2508",
 		APIKeyHint: "...",
 	},
 	{
@@ -123,7 +123,7 @@ var aiPresets = []aiPreset{
 		Label:      "xAI Grok",
 		Provider:   "openai",
 		Endpoint:   "https://api.x.ai/v1/chat/completions",
-		Model:      "grok-2-latest",
+		Model:      "grok-4.20-reasoning",
 		APIKeyHint: "xai-...",
 	},
 	{

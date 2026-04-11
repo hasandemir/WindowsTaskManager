@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ type AIAdvisor interface {
 	Enabled() bool
 	Status() map[string]any
 	Analyze(ctx context.Context, prompt string) (*ai.AnalyzeResult, error)
+	BackgroundState() ai.BackgroundState
 }
 
 // Server is the HTTP server hosting the REST API, SSE stream, and embedded UI.
@@ -140,15 +142,13 @@ func (r *statusRecorder) Flush() {
 // scoped to local control by design.
 func localOnlyMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		host := r.RemoteAddr
-		// Strip port (last colon).
-		for i := len(host) - 1; i >= 0; i-- {
-			if host[i] == ':' {
-				host = host[:i]
-				break
-			}
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			http.Error(w, "forbidden: invalid remote address", http.StatusForbidden)
+			return
 		}
-		if host != "127.0.0.1" && host != "::1" && host != "localhost" {
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
 			http.Error(w, "forbidden: local-only API", http.StatusForbidden)
 			return
 		}

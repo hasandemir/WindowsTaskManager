@@ -15,12 +15,13 @@ import (
 // struct mirrors Suggestion (including the opaque ID) rather than pruning
 // fields — readJSON uses DisallowUnknownFields and would 400 otherwise.
 type aiExecuteRequest struct {
-	ID     string       `json:"id,omitempty"`   // opaque — ignored server-side, used for UI dedup
-	Type   string       `json:"type"`           // kill | suspend | protect | ignore | add_rule
-	PID    uint32       `json:"pid,omitempty"`  // required for kill/suspend
-	Name   string       `json:"name,omitempty"` // required for protect/ignore
+	ID     string             `json:"id,omitempty"`   // opaque — ignored server-side, used for UI dedup
+	Type   string             `json:"type"`           // kill | suspend | protect | ignore | add_rule
+	PID    uint32             `json:"pid,omitempty"`  // required for kill/suspend
+	Name   string             `json:"name,omitempty"` // required for protect/ignore
 	Rule   *ai.RuleSuggestion `json:"rule,omitempty"` // required for add_rule
 	Reason string             `json:"reason,omitempty"`
+	Policy *ai.AutoPolicy     `json:"policy,omitempty"` // ignored server-side; used by UI for dry-run labels
 }
 
 // aiRuleToConfig validates and converts the LLM-emitted rule wire shape into

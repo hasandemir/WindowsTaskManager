@@ -20,8 +20,10 @@ import (
 	"github.com/ersinkoc/WindowsTaskManager/internal/config"
 	"github.com/ersinkoc/WindowsTaskManager/internal/controller"
 	"github.com/ersinkoc/WindowsTaskManager/internal/event"
+	"github.com/ersinkoc/WindowsTaskManager/internal/platform"
 	"github.com/ersinkoc/WindowsTaskManager/internal/server"
 	"github.com/ersinkoc/WindowsTaskManager/internal/storage"
+	"github.com/ersinkoc/WindowsTaskManager/internal/telegram"
 	"github.com/ersinkoc/WindowsTaskManager/internal/tray"
 	"github.com/ersinkoc/WindowsTaskManager/internal/winapi"
 	"github.com/ersinkoc/WindowsTaskManager/web"
@@ -53,6 +55,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+	releaseInstance, err := platform.AcquireSingleInstance(`Local\WindowsTaskManager.Singleton`)
+	if err == platform.ErrAlreadyRunning {
+		dashURL := fmt.Sprintf("http://%s:%d", cfg.Server.Host, cfg.Server.Port)
+		log.Printf("another instance is already running; refusing to start a second copy")
+		if !*noBrowser {
+			_ = winapi.ShellExecute("open", dashURL, "", "", winapi.SW_SHOWNORMAL)
+		}
+		return
+	}
+	if err != nil {
+		log.Fatalf("single-instance guard: %v", err)
+	}
+	defer releaseInstance()
 
 	// Core wiring.
 	emitter := event.NewEmitter()
@@ -69,7 +84,9 @@ func main() {
 	alerts.SetMaxActive(cfg.Anomaly.MaxActiveAlerts)
 	engine := anomaly.NewEngine(cfg, store, emitter, alerts)
 	engine.SetActuator(ctrl) // rules engine can kill/suspend via the controller
-	advisor := ai.NewAdvisor(cfg, store, alerts.Active)
+	advisor := ai.NewAdvisor(cfg, store, alerts.Active, emitter)
+	tgBot := telegram.New(cfg, store, alerts, ctrl, emitter)
+	var trayInst *tray.Tray
 
 	// Prime first snapshot before serving HTTP.
 	mgr.CollectOnce()
@@ -82,6 +99,10 @@ func main() {
 		ctrl.SetConfig(newCfg)
 		engine.SetConfig(newCfg)
 		advisor.SetConfig(newCfg)
+		tgBot.SetConfig(newCfg)
+		if trayInst != nil {
+			trayInst.SetConfig(newCfg)
+		}
 		alerts.SetMaxActive(newCfg.Anomaly.MaxActiveAlerts)
 		// Purge active alerts whose detector is now disabled — otherwise the
 		// UI keeps showing stale entries that will never refresh or clear.
@@ -109,6 +130,7 @@ func main() {
 
 	mgr.Start(rootCtx)
 	engine.Start(rootCtx)
+	tgBot.Start(rootCtx)
 
 	// Config hot-reload watcher.
 	watcher := config.NewWatcher(cfgPath, func(newCfg *config.Config) {
@@ -135,7 +157,6 @@ func main() {
 	}
 
 	var trayWG sync.WaitGroup
-	var trayInst *tray.Tray
 	if !*noTray {
 		trayInst = tray.New(cfg, dashURL, cfgPath, emitter, func() {
 			cancel()

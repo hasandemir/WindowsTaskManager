@@ -76,22 +76,18 @@ func (m *Manager) CollectOnce() *metrics.SystemSnapshot {
 }
 
 func (m *Manager) fastLoop(ctx context.Context) {
-	interval := m.cfg.Monitoring.Interval
-	if interval < 200*time.Millisecond {
-		interval = 1000 * time.Millisecond
-	}
-	t := time.NewTicker(interval)
-	defer t.Stop()
-
 	pruneT := time.NewTicker(30 * time.Second)
 	defer pruneT.Stop()
+	timer := time.NewTimer(m.fastInterval())
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case <-timer.C:
 			m.fastSample()
+			timer.Reset(m.fastInterval())
 		case <-pruneT.C:
 			m.store.PruneStaleProcesses(time.Now().Add(-2 * time.Minute))
 		}
@@ -131,20 +127,17 @@ func (m *Manager) fastSample() *metrics.SystemSnapshot {
 }
 
 func (m *Manager) treeLoop(ctx context.Context) {
-	interval := m.cfg.Monitoring.ProcessTreeInterval
-	if interval < 500*time.Millisecond {
-		interval = 2 * time.Second
-	}
-	t := time.NewTicker(interval)
-	defer t.Stop()
+	timer := time.NewTimer(m.treeInterval())
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case <-timer.C:
 			snap := m.store.Latest()
 			if snap == nil {
+				timer.Reset(m.treeInterval())
 				continue
 			}
 			tree := BuildProcessTree(snap.Processes)
@@ -153,26 +146,24 @@ func (m *Manager) treeLoop(ctx context.Context) {
 			if m.emitter != nil {
 				m.emitter.Emit(EventProcessTree, tree)
 			}
+			timer.Reset(m.treeInterval())
 		}
 	}
 }
 
 func (m *Manager) portsLoop(ctx context.Context) {
-	interval := m.cfg.Monitoring.PortScanInterval
-	if interval < 500*time.Millisecond {
-		interval = 3 * time.Second
-	}
-	t := time.NewTicker(interval)
-	defer t.Stop()
+	timer := time.NewTimer(m.portsInterval())
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case <-timer.C:
 			bindings := m.ports.Collect(m.lookupPID)
 			snap := m.store.Latest()
 			if snap == nil {
+				timer.Reset(m.portsInterval())
 				continue
 			}
 			snap.PortBindings = bindings
@@ -180,6 +171,7 @@ func (m *Manager) portsLoop(ctx context.Context) {
 			if m.emitter != nil {
 				m.emitter.Emit(EventPortBindings, bindings)
 			}
+			timer.Reset(m.portsInterval())
 		}
 	}
 }
@@ -192,8 +184,52 @@ func (m *Manager) lookupPID(pid uint32) string {
 
 // ApplyConfig updates collectors that have config-derived state.
 func (m *Manager) ApplyConfig(cfg *config.Config) {
+	m.mu.Lock()
 	m.cfg = cfg
+	m.mu.Unlock()
 	m.ports.SetWellKnown(cfg.WellKnownPorts)
+}
+
+func (m *Manager) currentConfig() *config.Config {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.cfg
+}
+
+func (m *Manager) fastInterval() time.Duration {
+	cfg := m.currentConfig()
+	interval := time.Second
+	if cfg != nil {
+		interval = cfg.Monitoring.Interval
+	}
+	if interval < 200*time.Millisecond {
+		return time.Second
+	}
+	return interval
+}
+
+func (m *Manager) treeInterval() time.Duration {
+	cfg := m.currentConfig()
+	interval := 2 * time.Second
+	if cfg != nil {
+		interval = cfg.Monitoring.ProcessTreeInterval
+	}
+	if interval < 500*time.Millisecond {
+		return 2 * time.Second
+	}
+	return interval
+}
+
+func (m *Manager) portsInterval() time.Duration {
+	cfg := m.currentConfig()
+	interval := 3 * time.Second
+	if cfg != nil {
+		interval = cfg.Monitoring.PortScanInterval
+	}
+	if interval < 500*time.Millisecond {
+		return 3 * time.Second
+	}
+	return interval
 }
 
 // CPUInfoFromRegistry reads the processor name and base MHz from registry.

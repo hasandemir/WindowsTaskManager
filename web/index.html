@@ -151,6 +151,16 @@
 
   <section id="tab-ai" class="tab-pane">
     <div class="ai-status" id="ai-status">checking…</div>
+    <section class="ai-watch" id="ai-watch">
+      <div class="ai-watch-head">
+        <h3>Background Watch</h3>
+        <span id="ai-watch-pill" class="badge offline">disabled</span>
+      </div>
+      <div id="ai-watch-summary" class="muted">No background runs yet.</div>
+      <pre id="ai-watch-answer" class="ai-answer ai-watch-answer"></pre>
+      <div id="ai-watch-actions" class="ai-actions"></div>
+      <ul id="ai-watch-runs" class="ai-watch-runs"></ul>
+    </section>
 
     <details id="ai-settings" class="ai-settings">
       <summary>Provider settings</summary>
@@ -200,6 +210,48 @@
           <span id="ai-save-msg" class="muted"></span>
         </div>
         <p class="muted" id="ai-preset-note"></p>
+      </div>
+    </details>
+
+    <details id="tg-settings" class="ai-settings">
+      <summary>Telegram rescue bot</summary>
+      <div class="ai-form">
+        <label class="ai-row">
+          <span>Bot token <small id="tg-token-state" class="muted"></small></span>
+          <input id="tg-token" type="password" placeholder="123456:ABC..." autocomplete="off" />
+        </label>
+        <label class="ai-row">
+          <span>API base URL</span>
+          <input id="tg-api-base" type="url" placeholder="https://api.telegram.org" />
+        </label>
+        <label class="ai-row">
+          <span>Allowed chat IDs</span>
+          <textarea id="tg-chat-ids" rows="3" placeholder="One chat id per line"></textarea>
+        </label>
+        <label class="ai-row">
+          <span>Poll timeout (sec)</span>
+          <input id="tg-poll-timeout" type="number" min="5" max="60" step="1" />
+        </label>
+        <label class="ai-row">
+          <span>Confirm TTL (sec)</span>
+          <input id="tg-confirm-ttl" type="number" min="15" max="600" step="5" />
+        </label>
+        <label class="ai-row checkbox">
+          <input id="tg-enabled" type="checkbox" />
+          <span>Enabled</span>
+        </label>
+        <label class="ai-row checkbox">
+          <input id="tg-notify-critical" type="checkbox" />
+          <span>Push critical alerts</span>
+        </label>
+        <label class="ai-row checkbox">
+          <input id="tg-require-confirm" type="checkbox" />
+          <span>Require confirm for kill/suspend</span>
+        </label>
+        <div class="ai-row buttons">
+          <button id="tg-save" type="button">Save Telegram</button>
+          <span id="tg-save-msg" class="muted"></span>
+        </div>
       </div>
     </details>
 

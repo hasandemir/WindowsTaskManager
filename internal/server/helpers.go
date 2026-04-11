@@ -2,10 +2,14 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 )
+
+const maxJSONBodyBytes int64 = 1 << 20 // 1 MiB
 
 // writeJSON sends a JSON-encoded payload.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
@@ -36,11 +40,16 @@ func readJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 		writeError(w, http.StatusBadRequest, "invalid_body", "missing request body")
 		return false
 	}
-	defer r.Body.Close()
-	dec := json.NewDecoder(r.Body)
+	body := http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	defer body.Close()
+	dec := json.NewDecoder(body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return false
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_json", "request body must contain a single JSON value")
 		return false
 	}
 	return true

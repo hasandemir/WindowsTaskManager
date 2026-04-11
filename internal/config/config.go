@@ -24,6 +24,7 @@ type Config struct {
 	Notifications  NotificationsConfig `yaml:"notifications"`
 	WellKnownPorts map[uint16]string   `yaml:"well_known_ports"`
 	AI             AIConfig            `yaml:"ai"`
+	Telegram       TelegramConfig      `yaml:"telegram"`
 	UI             UIConfig            `yaml:"ui"`
 	Rules          []Rule              `yaml:"rules"`
 }
@@ -32,15 +33,15 @@ type Config struct {
 // matching `match` satisfies `when` for at least `for` seconds, do `action`".
 // Rules are evaluated on every anomaly tick and hot-reload with the config.
 type Rule struct {
-	Name       string        `yaml:"name" json:"name"`
-	Enabled    bool          `yaml:"enabled" json:"enabled"`
-	Match      string        `yaml:"match" json:"match"`                 // case-insensitive substring of process name
-	Metric     string        `yaml:"metric" json:"metric"`               // "cpu_percent" | "memory_bytes" | "thread_count"
-	Op         string        `yaml:"op" json:"op"`                       // ">" | ">=" | "<" | "<=" (default ">=")
-	Threshold  float64       `yaml:"threshold" json:"threshold"`         // bytes for memory, percent for cpu, count for threads
-	For        time.Duration `yaml:"for" json:"for"`                     // min duration condition must hold (0 = immediate)
-	Action     string        `yaml:"action" json:"action"`               // "kill" | "suspend" | "alert"
-	Cooldown   time.Duration `yaml:"cooldown" json:"cooldown"`           // min gap between repeat actions on same pid (default 1m)
+	Name      string        `yaml:"name" json:"name"`
+	Enabled   bool          `yaml:"enabled" json:"enabled"`
+	Match     string        `yaml:"match" json:"match"`         // case-insensitive substring of process name
+	Metric    string        `yaml:"metric" json:"metric"`       // "cpu_percent" | "memory_bytes" | "thread_count"
+	Op        string        `yaml:"op" json:"op"`               // ">" | ">=" | "<" | "<=" (default ">=")
+	Threshold float64       `yaml:"threshold" json:"threshold"` // bytes for memory, percent for cpu, count for threads
+	For       time.Duration `yaml:"for" json:"for"`             // min duration condition must hold (0 = immediate)
+	Action    string        `yaml:"action" json:"action"`       // "kill" | "suspend" | "alert"
+	Cooldown  time.Duration `yaml:"cooldown" json:"cooldown"`   // min gap between repeat actions on same pid (default 1m)
 }
 
 type ServerConfig struct {
@@ -144,19 +145,21 @@ type NotificationsConfig struct {
 }
 
 type AIConfig struct {
-	Enabled                bool              `yaml:"enabled"`
-	Provider               string            `yaml:"provider"`
-	APIKey                 string            `yaml:"api_key"`
-	Model                  string            `yaml:"model"`
-	Endpoint               string            `yaml:"endpoint"`
-	ExtraHeaders           map[string]string `yaml:"extra_headers"`
-	AutoAnalyzeOnCritical  bool              `yaml:"auto_analyze_on_critical"`
-	MaxTokens              int               `yaml:"max_tokens"`
-	MaxRequestsPerMinute   int               `yaml:"max_requests_per_minute"`
-	Language               string            `yaml:"language"`
-	IncludeProcessTree     bool              `yaml:"include_process_tree"`
-	IncludePortMap         bool              `yaml:"include_port_map"`
-	HistoryContextDuration time.Duration     `yaml:"history_context_duration"`
+	Enabled                bool               `yaml:"enabled"`
+	Provider               string             `yaml:"provider"`
+	APIKey                 string             `yaml:"api_key"`
+	Model                  string             `yaml:"model"`
+	Endpoint               string             `yaml:"endpoint"`
+	ExtraHeaders           map[string]string  `yaml:"extra_headers"`
+	AutoAnalyzeOnCritical  bool               `yaml:"auto_analyze_on_critical"`
+	MaxTokens              int                `yaml:"max_tokens"`
+	MaxRequestsPerMinute   int                `yaml:"max_requests_per_minute"`
+	Language               string             `yaml:"language"`
+	IncludeProcessTree     bool               `yaml:"include_process_tree"`
+	IncludePortMap         bool               `yaml:"include_port_map"`
+	HistoryContextDuration time.Duration      `yaml:"history_context_duration"`
+	Scheduler              AISchedulerConfig  `yaml:"scheduler"`
+	AutoAction             AIAutoActionConfig `yaml:"auto_action"`
 }
 
 type UIConfig struct {
@@ -166,6 +169,34 @@ type UIConfig struct {
 	SparklinePoints      int           `yaml:"sparkline_points"`
 	ProcessTablePageSize int           `yaml:"process_table_page_size"`
 	RefreshRate          time.Duration `yaml:"refresh_rate"`
+}
+
+type AISchedulerConfig struct {
+	Enabled                 bool          `yaml:"enabled"`
+	MinInterval             time.Duration `yaml:"min_interval"`
+	MaxCyclesPerHour        int           `yaml:"max_cycles_per_hour"`
+	MaxReservedTokensPerDay int           `yaml:"max_reserved_tokens_per_day"`
+	CooldownAfterError      time.Duration `yaml:"cooldown_after_error"`
+	HistoryLimit            int           `yaml:"history_limit"`
+}
+
+type AIAutoActionConfig struct {
+	Enabled             bool          `yaml:"enabled"`
+	DryRun              bool          `yaml:"dry_run"`
+	AllowedActions      []string      `yaml:"allowed_actions"`
+	RequireRepeatCycles int           `yaml:"require_repeat_cycles"`
+	CooldownPerPID      time.Duration `yaml:"cooldown_per_pid"`
+}
+
+type TelegramConfig struct {
+	Enabled          bool          `yaml:"enabled"`
+	BotToken         string        `yaml:"bot_token"`
+	AllowedChatIDs   []int64       `yaml:"allowed_chat_ids"`
+	APIBaseURL       string        `yaml:"api_base_url"`
+	PollTimeout      time.Duration `yaml:"poll_timeout"`
+	NotifyOnCritical bool          `yaml:"notify_on_critical"`
+	RequireConfirm   bool          `yaml:"require_confirm"`
+	ConfirmTTL       time.Duration `yaml:"confirm_ttl"`
 }
 
 // DefaultConfig returns sensible defaults for all settings.
@@ -304,6 +335,31 @@ func DefaultConfig() *Config {
 			IncludeProcessTree:     true,
 			IncludePortMap:         true,
 			HistoryContextDuration: 5 * time.Minute,
+			Scheduler: AISchedulerConfig{
+				Enabled:                 false,
+				MinInterval:             2 * time.Minute,
+				MaxCyclesPerHour:        12,
+				MaxReservedTokensPerDay: 12000,
+				CooldownAfterError:      10 * time.Minute,
+				HistoryLimit:            8,
+			},
+			AutoAction: AIAutoActionConfig{
+				Enabled:             false,
+				DryRun:              true,
+				AllowedActions:      []string{"ignore", "protect", "add_rule"},
+				RequireRepeatCycles: 2,
+				CooldownPerPID:      30 * time.Minute,
+			},
+		},
+		Telegram: TelegramConfig{
+			Enabled:          false,
+			BotToken:         "",
+			AllowedChatIDs:   []int64{},
+			APIBaseURL:       "https://api.telegram.org",
+			PollTimeout:      25 * time.Second,
+			NotifyOnCritical: true,
+			RequireConfirm:   true,
+			ConfirmTTL:       90 * time.Second,
 		},
 		UI: UIConfig{
 			Theme:                "system",
@@ -330,6 +386,45 @@ func (c *Config) Validate() error {
 	}
 	if c.UI.SparklinePoints < 10 {
 		c.UI.SparklinePoints = 10
+	}
+	if c.AI.MaxTokens < 64 {
+		c.AI.MaxTokens = 64
+	}
+	if c.AI.MaxRequestsPerMinute < 1 {
+		c.AI.MaxRequestsPerMinute = 1
+	}
+	if c.AI.Scheduler.MinInterval < 15*time.Second {
+		c.AI.Scheduler.MinInterval = 15 * time.Second
+	}
+	if c.AI.Scheduler.MaxCyclesPerHour < 1 {
+		c.AI.Scheduler.MaxCyclesPerHour = 1
+	}
+	if c.AI.Scheduler.MaxReservedTokensPerDay < c.AI.MaxTokens {
+		c.AI.Scheduler.MaxReservedTokensPerDay = c.AI.MaxTokens
+	}
+	if c.AI.Scheduler.CooldownAfterError < 30*time.Second {
+		c.AI.Scheduler.CooldownAfterError = 30 * time.Second
+	}
+	if c.AI.Scheduler.HistoryLimit < 1 {
+		c.AI.Scheduler.HistoryLimit = 1
+	}
+	if len(c.AI.AutoAction.AllowedActions) == 0 {
+		c.AI.AutoAction.AllowedActions = []string{"ignore", "protect", "add_rule"}
+	}
+	if c.AI.AutoAction.RequireRepeatCycles < 1 {
+		c.AI.AutoAction.RequireRepeatCycles = 1
+	}
+	if c.AI.AutoAction.CooldownPerPID < 0 {
+		c.AI.AutoAction.CooldownPerPID = 0
+	}
+	if c.Telegram.APIBaseURL == "" {
+		c.Telegram.APIBaseURL = "https://api.telegram.org"
+	}
+	if c.Telegram.PollTimeout < 5*time.Second {
+		c.Telegram.PollTimeout = 5 * time.Second
+	}
+	if c.Telegram.ConfirmTTL < 15*time.Second {
+		c.Telegram.ConfirmTTL = 15 * time.Second
 	}
 	return nil
 }

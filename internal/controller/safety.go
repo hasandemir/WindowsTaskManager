@@ -4,7 +4,9 @@ package controller
 
 import (
 	"errors"
+	"os"
 	"strings"
+	"sync"
 
 	"github.com/ersinkoc/WindowsTaskManager/internal/config"
 	"github.com/ersinkoc/WindowsTaskManager/internal/metrics"
@@ -16,22 +18,43 @@ var (
 	ErrCritical      = errors.New("process is marked critical by Windows")
 	ErrConfirmNeeded = errors.New("operation requires explicit confirmation")
 	ErrNotFound      = errors.New("process not found")
+	ErrSelf          = errors.New("operation not allowed on the running Windows Task Manager process")
 )
 
 // Safety enforces the kill/suspend/limit policies declared in config.
 type Safety struct {
-	cfg *config.Config
+	mu      sync.RWMutex
+	cfg     *config.Config
+	selfPID uint32
 }
 
-func NewSafety(cfg *config.Config) *Safety { return &Safety{cfg: cfg} }
+func NewSafety(cfg *config.Config) *Safety {
+	return &Safety{
+		cfg:     cfg,
+		selfPID: uint32(os.Getpid()),
+	}
+}
 
 // SetConfig swaps the active config (called on hot reload).
-func (s *Safety) SetConfig(cfg *config.Config) { s.cfg = cfg }
+func (s *Safety) SetConfig(cfg *config.Config) {
+	s.mu.Lock()
+	s.cfg = cfg
+	s.mu.Unlock()
+}
 
 // Check verifies whether destructive action is allowed against `info`.
 // `forceConfirmed` indicates the user has provided explicit confirmation
 // for confirm-required cases.
 func (s *Safety) Check(info metrics.ProcessInfo, forceConfirmed bool) error {
+	s.mu.RLock()
+	cfg := s.cfg
+	s.mu.RUnlock()
+	if cfg == nil {
+		return ErrProtected
+	}
+	if info.PID == s.selfPID {
+		return ErrSelf
+	}
 	if info.PID == 0 || info.PID == 4 {
 		return ErrCritical
 	}
@@ -39,12 +62,12 @@ func (s *Safety) Check(info metrics.ProcessInfo, forceConfirmed bool) error {
 		return ErrCritical
 	}
 	name := strings.ToLower(info.Name)
-	for _, p := range s.cfg.Controller.ProtectedProcesses {
+	for _, p := range cfg.Controller.ProtectedProcesses {
 		if strings.EqualFold(p, name) || strings.EqualFold(p, info.Name) {
 			return ErrProtected
 		}
 	}
-	if isSystemPath(info.ExePath) && s.cfg.Controller.ConfirmKillSystem && !forceConfirmed {
+	if isSystemPath(info.ExePath) && cfg.Controller.ConfirmKillSystem && !forceConfirmed {
 		return ErrConfirmNeeded
 	}
 	return nil

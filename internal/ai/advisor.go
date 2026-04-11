@@ -11,6 +11,7 @@ import (
 
 	"github.com/ersinkoc/WindowsTaskManager/internal/anomaly"
 	"github.com/ersinkoc/WindowsTaskManager/internal/config"
+	"github.com/ersinkoc/WindowsTaskManager/internal/event"
 	"github.com/ersinkoc/WindowsTaskManager/internal/storage"
 )
 
@@ -36,24 +37,34 @@ type Advisor struct {
 	rl         *TokenBucket
 	cache      *Cache
 	httpClient *http.Client
+	emitter    *event.Emitter
 
 	lastErr        string
 	lastReqAt      time.Time
 	totalReqs      uint64
 	totalCacheHits uint64
+
+	bgMu sync.RWMutex
+	bg   backgroundTracker
 }
 
 // NewAdvisor builds a new advisor. alertSource is a closure that returns
 // the current active alerts for the prompt context.
-func NewAdvisor(cfg *config.Config, store *storage.Store, alertSource func() []anomaly.Alert) *Advisor {
-	return &Advisor{
+func NewAdvisor(cfg *config.Config, store *storage.Store, alertSource func() []anomaly.Alert, emitter *event.Emitter) *Advisor {
+	a := &Advisor{
 		cfg:        cfg,
 		store:      store,
 		alertsRef:  alertSource,
 		rl:         NewTokenBucket(cfg.AI.MaxRequestsPerMinute),
 		cache:      NewCache(60*time.Second, 64),
 		httpClient: &http.Client{Timeout: 60 * time.Second},
+		emitter:    emitter,
 	}
+	a.bg.applyConfig(cfg)
+	if emitter != nil {
+		emitter.On(anomaly.EventAlertRaised, a.handleRaisedAlert)
+	}
+	return a
 }
 
 // SetConfig hot-swaps the active config.
@@ -62,6 +73,9 @@ func (a *Advisor) SetConfig(cfg *config.Config) {
 	defer a.mu.Unlock()
 	a.cfg = cfg
 	a.rl = NewTokenBucket(cfg.AI.MaxRequestsPerMinute)
+	a.bgMu.Lock()
+	a.bg.applyConfig(cfg)
+	a.bgMu.Unlock()
 }
 
 // Enabled reports whether the advisor is configured to run.
@@ -116,7 +130,7 @@ func (a *Advisor) Analyze(ctx context.Context, userQuestion string) (*AnalyzeRes
 		a.totalCacheHits++
 		a.mu.Unlock()
 		cleaned, actions := parseActionsBlock(cached)
-		return &AnalyzeResult{Answer: cleaned, Actions: actions}, nil
+		return &AnalyzeResult{Answer: cleaned, Actions: actions, Cached: true}, nil
 	}
 
 	if !a.rl.Take() {
@@ -181,4 +195,16 @@ func effectiveEndpoint(cfg *config.Config) string {
 		return "https://api.openai.com/v1/chat/completions"
 	}
 	return ""
+}
+
+// BackgroundState returns the scheduler's current status plus recent runs.
+func (a *Advisor) BackgroundState() BackgroundState {
+	a.mu.RLock()
+	cfg := a.cfg
+	configured := a.cfg != nil && a.cfg.AI.Enabled && a.cfg.AI.APIKey != ""
+	a.mu.RUnlock()
+
+	a.bgMu.RLock()
+	defer a.bgMu.RUnlock()
+	return a.bg.snapshot(cfg, configured)
 }

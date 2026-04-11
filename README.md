@@ -8,11 +8,14 @@ and an optional LLM advisor with an approve-before-execute action flow.
   `golang.org/x/sys/windows`.
 - **Single executable.** The web UI is embedded with `embed.FS`. Drop
   `wtm.exe` anywhere and run.
+- **Single instance guard.** A second `wtm.exe` copy refuses to start and
+  reopens the existing dashboard instead of launching a duplicate monitor.
 - **Live everything.** CPU (per-core), memory, GPU (best effort), disks,
   network throughput, processes, process tree, TCP/UDP endpoints.
 - **Process control.** Kill / suspend / resume, priority, affinity, and
   Job-Object-based CPU + memory caps — all gated by a configurable
-  protection list.
+  protection list. WTM also protects its own running process from kill /
+  suspend style actions, and marks that row in the UI with a `WTM` badge.
 - **Per-process toggles.** Click the 🛡 on any row to protect a process
   from kill/suspend, or 🔕 to hide it from the anomaly engine. Both lists
   are persisted to `config.yaml`.
@@ -44,8 +47,16 @@ and an optional LLM advisor with an approve-before-execute action flow.
   UI parses it into per-card *Approve / Dismiss* buttons. Nothing runs
   until you click Approve. Supported action types: `kill`, `suspend`,
   `protect`, `ignore`, `add_rule`.
+- **Optional background AI watch.** Critical alerts can trigger a
+  budgeted background AI assessment with a minimum interval, hourly
+  cycle cap, and daily reserved-token cap. It never auto-executes
+  actions in this phase; it only surfaces a fresh diagnosis plus
+  approvable suggestions in the AI tab.
 - **System tray.** Native NotifyIcon with rate-limited balloon
   notifications. Right-click for menu.
+- **Telegram rescue bot.** Optional long-polling bot for emergency remote
+  control: inspect status / top CPU / alerts and, if needed, kill or
+  suspend a process through the same protection rules the local UI uses.
 - **Configurable.** YAML config with live reload and schema migration —
   edit, save, no restart.
 
@@ -133,13 +144,19 @@ You can configure it three ways:
 
 Examples:
 
+These examples intentionally use current model names rather than older
+`gpt-4o-mini` / `claude-3.5-sonnet` style picks. For Anthropic, the example
+uses a current dated snapshot because Anthropic recommends fixed model
+versions in production. If a provider rotates aliases again, prefer the
+newest official model listed in that provider's docs.
+
 ```yaml
 # Anthropic Claude (default)
 ai:
   enabled: true
   provider: anthropic
   api_key: sk-ant-...
-  model: claude-sonnet-4-5
+  model: claude-sonnet-4-20250514
   language: en
 
 # OpenAI
@@ -147,7 +164,7 @@ ai:
   enabled: true
   provider: openai
   api_key: sk-...
-  model: gpt-4o-mini
+  model: gpt-5-mini
 
 # OpenRouter (single key, hundreds of models)
 ai:
@@ -155,10 +172,13 @@ ai:
   provider: openai
   endpoint: https://openrouter.ai/api/v1/chat/completions
   api_key: sk-or-v1-...
-  model: anthropic/claude-3.5-sonnet
+  model: openrouter/auto
   extra_headers:
     HTTP-Referer: http://localhost
     X-Title: WTM
+
+# Or pin a current OpenRouter model explicitly
+# model: anthropic/claude-sonnet-4.5
 
 # Groq (very fast Llama / Mixtral)
 ai:
@@ -196,6 +216,81 @@ ai:
 The current snapshot, top processes, and active alerts are sent as
 context with every request. Responses are cached for 60 s and rate-limited
 to `max_requests_per_minute`.
+
+**Background watch.** If you want AI to react to critical alerts without
+manually pressing Analyze, enable `ai.scheduler.enabled: true`. The
+watcher listens for newly raised `critical` anomaly alerts and runs a
+background AI pass, but only if all of these guards allow it:
+
+- `ai.auto_analyze_on_critical: true`
+- at least `ai.scheduler.min_interval` since the last background pass
+- fewer than `ai.scheduler.max_cycles_per_hour` background passes in the last hour
+- fewer than `ai.scheduler.max_reserved_tokens_per_day` reserved output tokens for the day
+
+The latest background diagnosis, suggestion cards, and recent run log are
+shown in the AI tab and available from `GET /api/v1/ai/watch`.
+
+You can also enable a deterministic dry-run auto-action policy:
+
+- `ai.auto_action.enabled: true`
+- `ai.auto_action.dry_run: true`
+- `ai.auto_action.allowed_actions: [ignore, protect, add_rule]`
+- `ai.auto_action.require_repeat_cycles: 2`
+
+This does **not** execute anything automatically yet. It only marks
+background suggestions as `blocked`, `needs_repeat`, or `dry_run_eligible`
+so you can see which recommendations would qualify under a future
+auto-execution policy.
+
+### Telegram rescue bot
+
+WTM can also expose a small Telegram bot for "machine is choking, UI barely
+opens" moments. The bot uses long polling via the official Telegram Bot API
+and only responds to whitelisted chat IDs.
+
+Example config:
+
+```yaml
+telegram:
+  enabled: true
+  bot_token: 123456:ABC...
+  allowed_chat_ids:
+    - 123456789
+  api_base_url: https://api.telegram.org
+  poll_timeout: 25s
+  notify_on_critical: true
+  require_confirm: true
+  confirm_ttl: 90s
+```
+
+You can also edit the same settings from the **AI** tab under
+**Telegram rescue bot**.
+
+Supported commands:
+
+- `/status`
+- `/topcpu`
+- `/alerts`
+- `/kill <pid>`
+- `/suspend <pid>`
+- `/resume <pid>`
+- `/killtop`
+- `/suspendtop`
+- `/confirm <code>`
+- `/cancel <code>`
+
+Destructive commands still go through the normal controller safety checks:
+protected and critical processes remain protected, and the bot only works
+for `allowed_chat_ids`.
+
+By default, destructive Telegram actions are two-step:
+
+1. `/kill 1234` or `/killtop` creates a short-lived pending action.
+2. The bot replies with a one-time code such as `/confirm ABCD1234`.
+3. You can cancel it with `/cancel ABCD1234` until `telegram.confirm_ttl` expires.
+
+That keeps the "machine is freezing" rescue flow fast, while reducing the
+chance of an accidental remote kill from a fat-fingered chat command.
 
 **Action flow.** The advisor is prompted to end its reply with an
 `<actions>[...]</actions>` block. The server parses it into

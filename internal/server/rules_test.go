@@ -89,12 +89,12 @@ func TestRulesValidation(t *testing.T) {
 	s, _ := newTestServer(t, cfgPath, cfg)
 
 	bad := []string{
-		`{"rules":[{"name":"","match":"x","metric":"cpu_percent"}]}`,                       // blank name
-		`{"rules":[{"name":"a","match":"","metric":"cpu_percent"}]}`,                       // blank match
-		`{"rules":[{"name":"a","match":"x","metric":"bogus"}]}`,                            // bad metric
-		`{"rules":[{"name":"a","match":"x","metric":"cpu_percent","op":"bogus"}]}`,         // bad op
-		`{"rules":[{"name":"a","match":"x","metric":"cpu_percent","action":"reboot"}]}`,    // bad action
-		`{"rules":[{"name":"a","match":"x","metric":"cpu_percent","for_seconds":999999}]}`, // for too large
+		`{"rules":[{"name":"","match":"x","metric":"cpu_percent"}]}`,                                                  // blank name
+		`{"rules":[{"name":"a","match":"","metric":"cpu_percent"}]}`,                                                  // blank match
+		`{"rules":[{"name":"a","match":"x","metric":"bogus"}]}`,                                                       // bad metric
+		`{"rules":[{"name":"a","match":"x","metric":"cpu_percent","op":"bogus"}]}`,                                    // bad op
+		`{"rules":[{"name":"a","match":"x","metric":"cpu_percent","action":"reboot"}]}`,                               // bad action
+		`{"rules":[{"name":"a","match":"x","metric":"cpu_percent","for_seconds":999999}]}`,                            // for too large
 		`{"rules":[{"name":"a","match":"x","metric":"cpu_percent"},{"name":"a","match":"y","metric":"cpu_percent"}]}`, // dup name
 	}
 	for _, body := range bad {

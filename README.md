@@ -4,6 +4,11 @@ A single-binary, pure-Go alternative to the built-in Windows Task Manager
 that exposes a real-time web dashboard, REST API, anomaly detection engine,
 and an optional LLM advisor with an approve-before-execute action flow.
 
+Current release: [`v0.1.0`](https://github.com/ersinkoc/WindowsTaskManager/releases/tag/v0.1.0)
+
+Project history lives in [`CHANGELOG.md`](CHANGELOG.md), and the release
+checklist lives in [`RELEASING.md`](RELEASING.md).
+
 - **Pure Go.** No CGo, no WMI, no PowerShell. Direct Win32 API calls via
   `golang.org/x/sys/windows`.
 - **Single executable.** The web UI is embedded with `embed.FS`. Drop

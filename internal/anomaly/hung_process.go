@@ -48,6 +48,9 @@ func (d *HungProcessDetector) Analyze(ctx *AnalysisContext) {
 		if _, skip := whitelist[strings.ToLower(p.Name)]; skip {
 			continue
 		}
+		if isIgnoredProcess(ctx.Cfg, p.Name) {
+			continue
+		}
 		ioSum := p.IOReadBytes + p.IOWriteBytes
 		st, ok := d.states[p.PID]
 		if !ok {

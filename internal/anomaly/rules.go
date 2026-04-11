@@ -56,6 +56,9 @@ func (d *RulesDetector) Analyze(ctx *AnalysisContext) {
 			if !strings.Contains(strings.ToLower(p.Name), match) {
 				continue
 			}
+			if isIgnoredProcess(ctx.Cfg, p.Name) {
+				continue
+			}
 			value, ok := ruleMetricValue(r.Metric, p)
 			if !ok {
 				continue

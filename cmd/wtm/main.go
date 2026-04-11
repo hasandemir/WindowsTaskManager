@@ -62,6 +62,7 @@ func main() {
 	mgr := collector.NewManager(cfg, store, emitter, cpuName, cpuMHz)
 	ctrl := controller.NewController(cfg, store, emitter)
 	alerts := anomaly.NewAlertStore(256)
+	alerts.SetMaxActive(cfg.Anomaly.MaxActiveAlerts)
 	engine := anomaly.NewEngine(cfg, store, emitter, alerts)
 	engine.SetActuator(ctrl) // rules engine can kill/suspend via the controller
 	advisor := ai.NewAdvisor(cfg, store, alerts.Active)
@@ -77,6 +78,7 @@ func main() {
 		ctrl.SetConfig(newCfg)
 		engine.SetConfig(newCfg)
 		advisor.SetConfig(newCfg)
+		alerts.SetMaxActive(newCfg.Anomaly.MaxActiveAlerts)
 	}
 
 	srv := server.New(server.Options{

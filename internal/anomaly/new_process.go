@@ -38,6 +38,9 @@ func (d *NewProcessDetector) Analyze(ctx *AnalysisContext) {
 			continue
 		}
 		d.known[p.PID] = struct{}{}
+		if isIgnoredProcess(ctx.Cfg, p.Name) {
+			continue
+		}
 		if p.ExePath == "" {
 			continue
 		}

@@ -34,6 +34,9 @@ func (d *OrphanDetector) Analyze(ctx *AnalysisContext) {
 		if _, alive := pidSet[p.ParentPID]; alive {
 			continue
 		}
+		if isIgnoredProcess(ctx.Cfg, p.Name) {
+			continue
+		}
 		if p.CPUPercent < float64(cfg.ResourceThresholdCPU) && p.WorkingSet < memThresh {
 			continue
 		}

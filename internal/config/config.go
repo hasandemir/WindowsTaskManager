@@ -55,6 +55,8 @@ type ControllerConfig struct {
 
 type AnomalyConfig struct {
 	AnalysisInterval time.Duration        `yaml:"analysis_interval"`
+	IgnoreProcesses  []string             `yaml:"ignore_processes"`
+	MaxActiveAlerts  int                  `yaml:"max_active_alerts"`
 	SpawnStorm       SpawnStormConfig     `yaml:"spawn_storm"`
 	MemoryLeak       MemoryLeakConfig     `yaml:"memory_leak"`
 	HungProcess      HungProcessConfig    `yaml:"hung_process"`
@@ -181,6 +183,17 @@ func DefaultConfig() *Config {
 		},
 		Anomaly: AnomalyConfig{
 			AnalysisInterval: 2 * time.Second,
+			MaxActiveAlerts:  200,
+			IgnoreProcesses: []string{
+				"System", "Registry", "Idle", "Memory Compression",
+				"smss.exe", "csrss.exe", "wininit.exe", "winlogon.exe",
+				"services.exe", "lsass.exe", "svchost.exe", "fontdrvhost.exe",
+				"dwm.exe", "sihost.exe", "taskhostw.exe", "RuntimeBroker.exe",
+				"SearchHost.exe", "SearchIndexer.exe", "StartMenuExperienceHost.exe",
+				"ShellExperienceHost.exe", "ctfmon.exe", "explorer.exe",
+				"spoolsv.exe", "MsMpEng.exe", "SecurityHealthService.exe",
+				"audiodg.exe", "conhost.exe", "dllhost.exe", "WmiPrvSE.exe",
+			},
 			SpawnStorm: SpawnStormConfig{
 				Enabled:              true,
 				MaxChildrenPerMinute: 20,

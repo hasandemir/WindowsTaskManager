@@ -35,6 +35,7 @@ type AlertStore struct {
 	active     map[string]*Alert
 	history    []Alert
 	maxHistory int
+	maxActive  int
 	nextID     uint64
 }
 
@@ -46,7 +47,17 @@ func NewAlertStore(maxHistory int) *AlertStore {
 		active:     make(map[string]*Alert),
 		history:    make([]Alert, 0, maxHistory),
 		maxHistory: maxHistory,
+		maxActive:  200,
 	}
+}
+
+// SetMaxActive updates the active-alert cap. Called when config is (re)loaded
+// so the user can tune how much alert noise the UI is allowed to hold. A value
+// <= 0 disables the cap.
+func (s *AlertStore) SetMaxActive(n int) {
+	s.mu.Lock()
+	s.maxActive = n
+	s.mu.Unlock()
 }
 
 // key returns the dedupe key (type + pid).
@@ -63,6 +74,17 @@ func (s *AlertStore) Raise(a Alert) (Alert, bool) {
 		existing.Severity = a.Severity
 		existing.Details = a.Details
 		return *existing, false
+	}
+	// Safety cap — when the active set is full, drop new raises on the floor
+	// (still appended to history so the user sees them in the log). Without
+	// this the UI can accumulate tens of thousands of entries from noisy
+	// detectors on real Windows systems.
+	if s.maxActive > 0 && len(s.active) >= s.maxActive {
+		s.nextID++
+		a.ID = key
+		a.Detected = time.Now()
+		s.appendHistory(a)
+		return a, false
 	}
 	s.nextID++
 	a.ID = key

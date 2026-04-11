@@ -29,6 +29,9 @@ func (d *MemoryLeakDetector) Analyze(ctx *AnalysisContext) {
 	windowStart := ctx.Now.Add(-cfg.Window)
 
 	for _, p := range ctx.Snapshot.Processes {
+		if isIgnoredProcess(ctx.Cfg, p.Name) {
+			continue
+		}
 		samples := ctx.Store.ProcessHistory(p.PID)
 		if len(samples) < 5 {
 			continue

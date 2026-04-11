@@ -44,6 +44,9 @@ func (d *RunawayCPUDetector) Analyze(ctx *AnalysisContext) {
 		if _, skip := whitelist[strings.ToLower(p.Name)]; skip {
 			continue
 		}
+		if isIgnoredProcess(ctx.Cfg, p.Name) {
+			continue
+		}
 		if p.CPUPercent < float64(cfg.CPUThreshold) {
 			delete(d.states, p.PID)
 			ctx.ClearAlert(d.Name(), p.PID)

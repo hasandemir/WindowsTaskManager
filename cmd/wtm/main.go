@@ -27,6 +27,10 @@ import (
 	"github.com/ersinkoc/WindowsTaskManager/web"
 )
 
+// version is injected at build time via -ldflags "-X main.version=X.Y.Z".
+// Stays as "dev" for plain `go build`.
+var version = "dev"
+
 func main() {
 	var (
 		configPath  = flag.String("config", "", "config file path (default %APPDATA%\\WindowsTaskManager\\config.yaml)")
@@ -37,7 +41,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Println("Windows Task Manager 1.0.0")
+		fmt.Printf("Windows Task Manager %s\n", version)
 		return
 	}
 

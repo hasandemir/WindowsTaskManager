@@ -1,12 +1,29 @@
 # Windows Task Manager — production build script
 # Produces a single optimized exe with no console window.
+#
+# Usage:
+#   .\build.ps1                      # builds wtm.exe tagged as 0.1.0
+#   .\build.ps1 -Version 0.2.0       # builds wtm.exe tagged as 0.2.0
+#   .\build.ps1 -Out wtm-0.1.0.exe   # write to a specific file name
+
+param(
+    [string]$Version = "0.1.0",
+    [string]$Out = "wtm.exe"
+)
 
 $ErrorActionPreference = "Stop"
+
+if ($Version -notmatch '^\d+\.\d+\.\d+(-[\w\.]+)?$') {
+    Write-Error "Version must look like 0.1.0 or 0.1.0-rc.1"
+    exit 1
+}
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $Root
 
-$Out = Join-Path $Root "wtm.exe"
+if (-not [System.IO.Path]::IsPathRooted($Out)) {
+    $Out = Join-Path $Root $Out
+}
 $Module = "./cmd/wtm"
 
 Write-Host "==> tidying modules"
@@ -18,17 +35,19 @@ go fmt ./...
 Write-Host "==> vet"
 go vet ./...
 
-Write-Host "==> building $Out"
+Write-Host "==> building $Out (version $Version)"
 $env:GOOS = "windows"
 $env:GOARCH = "amd64"
 $env:CGO_ENABLED = "0"
 
-$ldflags = "-s -w -H windowsgui -X main.version=1.0.0"
+$ldflags = "-s -w -H windowsgui -X main.version=$Version"
 go build -trimpath -ldflags $ldflags -o $Out $Module
 
 if (Test-Path $Out) {
     $size = (Get-Item $Out).Length / 1MB
+    $sha = (Get-FileHash $Out -Algorithm SHA256).Hash.ToLower()
     Write-Host ("==> done: {0} ({1:N1} MB)" -f $Out, $size)
+    Write-Host "==> sha256: $sha"
 } else {
     Write-Error "build failed"
     exit 1

@@ -2,8 +2,6 @@
 
 package winapi
 
-import "time"
-
 // FILETIME is Win32 FILETIME (100ns ticks since 1601-01-01).
 type FILETIME struct {
 	LowDateTime  uint32
@@ -23,15 +21,6 @@ func FileTimeToUnix(ft FILETIME) int64 {
 	}
 	seconds := int64(ticks/10000000) - epochDiff
 	return seconds
-}
-
-// FileTimeToTime converts to time.Time.
-func FileTimeToTime(ft FILETIME) time.Time {
-	sec := FileTimeToUnix(ft)
-	if sec == 0 {
-		return time.Time{}
-	}
-	return time.Unix(sec, 0)
 }
 
 // MEMORYSTATUSEX matches Win32 MEMORYSTATUSEX.
@@ -249,7 +238,6 @@ const (
 const (
 	TH32CS_SNAPPROCESS = 0x00000002
 	TH32CS_SNAPTHREAD  = 0x00000004
-	TH32CS_SNAPMODULE  = 0x00000008
 )
 
 // Job Object information class values.
@@ -262,7 +250,6 @@ const (
 // Job Object limit flags.
 const (
 	JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x00000100
-	JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
 )
 
 // Job Object CPU rate control flags.
@@ -283,17 +270,15 @@ const (
 
 // Shell_NotifyIcon flags.
 const (
-	NIM_ADD        = 0x00000000
-	NIM_MODIFY     = 0x00000001
-	NIM_DELETE     = 0x00000002
-	NIM_SETVERSION = 0x00000004
+	NIM_ADD    = 0x00000000
+	NIM_MODIFY = 0x00000001
+	NIM_DELETE = 0x00000002
 
 	NIF_MESSAGE = 0x00000001
 	NIF_ICON    = 0x00000002
 	NIF_TIP     = 0x00000004
 	NIF_INFO    = 0x00000010
 
-	NIIF_NONE    = 0x00000000
 	NIIF_INFO    = 0x00000001
 	NIIF_WARNING = 0x00000002
 	NIIF_ERROR   = 0x00000003
@@ -308,14 +293,11 @@ const (
 	WM_RBUTTONUP     = 0x0205
 	WM_COMMAND       = 0x0111
 	WM_DESTROY       = 0x0002
-	WM_QUIT          = 0x0012
-	WM_NULL          = 0x0000
 )
 
 // ShowWindow / ShellExecute constants.
 const (
 	SW_SHOWNORMAL = 1
-	SW_HIDE       = 0
 )
 
 // HWND_MESSAGE for message-only windows.
@@ -323,13 +305,10 @@ const HWND_MESSAGE = ^uintptr(2) //nolint:gocritic // 0xFFFFFFFD
 
 // Drive types.
 const (
-	DRIVE_UNKNOWN     = 0
-	DRIVE_NO_ROOT_DIR = 1
-	DRIVE_REMOVABLE   = 2
-	DRIVE_FIXED       = 3
-	DRIVE_REMOTE      = 4
-	DRIVE_CDROM       = 5
-	DRIVE_RAMDISK     = 6
+	DRIVE_UNKNOWN   = 0
+	DRIVE_REMOVABLE = 2
+	DRIVE_FIXED     = 3
+	DRIVE_REMOTE    = 4
 )
 
 // Address families.

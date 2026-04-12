@@ -9,12 +9,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// IsHungAppWindow returns true if the specified window is hung.
-func IsHungAppWindow(hwnd uintptr) bool {
-	r1, _, _ := procIsHungAppWindow.Call(hwnd)
-	return r1 != 0
-}
-
 // DefWindowProc calls the default window procedure.
 func DefWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	r1, _, _ := procDefWindowProcW.Call(hwnd, msg, wParam, lParam)

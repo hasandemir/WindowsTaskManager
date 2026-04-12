@@ -54,16 +54,16 @@ func readJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
-// parseUint32Param extracts a uint32 path parameter or writes a 400.
-func parseUint32Param(w http.ResponseWriter, r *http.Request, name string) (uint32, bool) {
-	raw := Param(r, name)
+// parsePIDParam extracts the pid path parameter or writes a 400.
+func parsePIDParam(w http.ResponseWriter, r *http.Request) (uint32, bool) {
+	raw := Param(r, "pid")
 	if raw == "" {
-		writeError(w, http.StatusBadRequest, "missing_param", name+" required")
+		writeError(w, http.StatusBadRequest, "missing_param", "pid required")
 		return 0, false
 	}
 	n, err := strconv.ParseUint(raw, 10, 32)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_param", name+" must be uint32")
+		writeError(w, http.StatusBadRequest, "invalid_param", "pid must be uint32")
 		return 0, false
 	}
 	return uint32(n), true

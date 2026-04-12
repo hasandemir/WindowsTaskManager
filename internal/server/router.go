@@ -73,6 +73,11 @@ func (rt *Router) PUT(p string, h http.HandlerFunc)    { rt.Handle("PUT", p, h) 
 func (rt *Router) DELETE(p string, h http.HandlerFunc) { rt.Handle("DELETE", p, h) }
 
 func (rt *Router) match(method string, parts []string) (http.HandlerFunc, Params, bool) {
+	var (
+		bestHandler http.HandlerFunc
+		bestParams  Params
+		bestLiteral = -1
+	)
 	for _, rte := range rt.routes {
 		if rte.method != method {
 			continue
@@ -81,6 +86,7 @@ func (rt *Router) match(method string, parts []string) (http.HandlerFunc, Params
 			continue
 		}
 		params := Params{}
+		literals := 0
 		ok := true
 		for i, part := range rte.parts {
 			if strings.HasPrefix(part, ":") {
@@ -91,12 +97,18 @@ func (rt *Router) match(method string, parts []string) (http.HandlerFunc, Params
 				ok = false
 				break
 			}
+			literals++
 		}
-		if ok {
-			return rte.handler, params, true
+		if ok && literals > bestLiteral {
+			bestHandler = rte.handler
+			bestParams = params
+			bestLiteral = literals
 		}
 	}
-	return nil, nil, false
+	if bestHandler == nil {
+		return nil, nil, false
+	}
+	return bestHandler, bestParams, true
 }
 
 // ServeHTTP implements http.Handler.

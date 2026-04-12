@@ -1,5 +1,5 @@
 import { HardDrive } from "lucide-react";
-import { DetailTile } from "../components/shared/detail-tile";
+import { DetailTile, SummaryCard } from "../components/shared/detail-tile";
 import { EmptyState } from "../components/shared/empty-state";
 import { PageHeader } from "../components/shared/page-header";
 import { PageSkeleton } from "../components/shared/page-skeleton";
@@ -20,30 +20,91 @@ export function DisksPage() {
     return <EmptyState icon={HardDrive} title="No drives detected" description="Disk telemetry will populate this page once the collector responds." />;
   }
 
+  const totalBytes = drives.reduce((sum, drive) => sum + drive.total_bytes, 0);
+  const usedBytes = drives.reduce((sum, drive) => sum + drive.used_bytes, 0);
+  const hottestDrive = [...drives].sort((left, right) => right.used_pct - left.used_pct)[0];
+
   return (
     <div className="space-y-6">
-      <PageHeader title="Disks" description="Capacity, throughput, and activity for visible drives." />
-      <div className="grid gap-4 lg:grid-cols-2">
+      <PageHeader
+        title="Disks"
+        description="Capacity, throughput, and pressure for every visible drive, with the fullest volumes called out first."
+        eyebrow="Storage"
+        icon={HardDrive}
+        meta={
+          <>
+            <Badge variant="info">{drives.length} drives</Badge>
+            <Badge variant={hottestDrive && hottestDrive.used_pct >= 90 ? "warning" : "success"}>
+              {hottestDrive ? `${hottestDrive.letter} busiest` : "Healthy"}
+            </Badge>
+          </>
+        }
+      />
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        <SummaryCard label="Total capacity" value={formatBytes(totalBytes)} accent={<Badge variant="neutral">Visible</Badge>} />
+        <SummaryCard label="Used capacity" value={formatBytes(usedBytes)} accent={<Badge variant="info">{formatPercent((usedBytes / totalBytes) * 100 || 0)}</Badge>} />
+        <SummaryCard
+          label="Highest pressure"
+          value={hottestDrive ? `${hottestDrive.letter} ${formatPercent(hottestDrive.used_pct)}` : "--"}
+          valueClassName="text-2xl font-semibold"
+          accent={<Badge variant={hottestDrive && hottestDrive.used_pct >= 90 ? "warning" : "success"}>Pressure</Badge>}
+        />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
         {drives.map((drive) => (
-          <Card key={drive.letter}>
-            <div className="flex items-center justify-between">
+          <Card key={drive.letter} className="space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h2 className="text-lg font-semibold tracking-tight text-foreground">{drive.letter}</h2>
-                <p className="text-sm text-secondary">{drive.label || drive.fs_type}</p>
+                <div className="eyebrow">Drive {drive.letter}</div>
+                <h2 className="mt-2 text-xl font-semibold tracking-tight text-foreground">{drive.label || drive.letter}</h2>
+                <p className="mt-1 text-sm leading-6 text-secondary">{drive.fs_type || "Unknown filesystem"} mounted and tracked by the collector.</p>
               </div>
-              <Badge variant={drive.used_pct >= 90 ? "warning" : "info"}>
-                {formatPercent(drive.used_pct)}
-              </Badge>
+              <Badge variant={drive.used_pct >= 90 ? "warning" : drive.used_pct >= 75 ? "info" : "success"}>{formatPercent(drive.used_pct)}</Badge>
             </div>
-            <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-              <DetailTile label="Used" value={`${formatBytes(drive.used_bytes)} / ${formatBytes(drive.total_bytes)}`} />
-              <DetailTile label="Filesystem" value={drive.fs_type || "Unknown"} />
-              <DetailTile label="Read" value={formatRate(drive.read_bps)} />
-              <DetailTile label="Write" value={formatRate(drive.write_bps)} />
+
+            <div className="meter">
+              <div className={meterBarClassName(drive.used_pct)} />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <DetailTile label="Used" value={`${formatBytes(drive.used_bytes)} / ${formatBytes(drive.total_bytes)}`} hint="Occupied capacity right now" />
+              <DetailTile label="Filesystem" value={drive.fs_type || "Unknown"} hint="Reported format from the collector" />
+              <DetailTile label="Read throughput" value={formatRate(drive.read_bps)} hint="Current inbound disk rate" />
+              <DetailTile label="Write throughput" value={formatRate(drive.write_bps)} hint="Current outbound disk rate" />
             </div>
           </Card>
         ))}
       </div>
     </div>
   );
+}
+
+function meterBarClassName(value: number) {
+  if (value >= 95) {
+    return "meter-bar w-full";
+  }
+  if (value >= 90) {
+    return "meter-bar w-[90%]";
+  }
+  if (value >= 80) {
+    return "meter-bar w-4/5";
+  }
+  if (value >= 75) {
+    return "meter-bar w-3/4";
+  }
+  if (value >= 66) {
+    return "meter-bar w-2/3";
+  }
+  if (value >= 50) {
+    return "meter-bar w-1/2";
+  }
+  if (value >= 33) {
+    return "meter-bar w-1/3";
+  }
+  if (value >= 20) {
+    return "meter-bar w-1/5";
+  }
+  return "meter-bar w-[10%]";
 }

@@ -79,14 +79,24 @@ export function PortsPage() {
   const listeningCount = bindings.filter((binding) => binding.state === "LISTEN").length;
   const remotePeerCount = bindings.filter((binding) => hasRemotePeer(binding)).length;
   const uniquePIDCount = new Set(bindings.map((binding) => binding.pid)).size;
+  const topOwners = topBindingOwners(filteredBindings);
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Ports"
-        description="Inspect which process owns which endpoint, whether it is only listening, and where active connections are reaching."
+        description="Inspect endpoint ownership, distinguish listeners from live peers, and narrow quickly by process or address."
+        eyebrow="Network ownership"
+        icon={Network}
+        meta={
+          <>
+            <Badge variant="info">{bindings.length} bindings</Badge>
+            <Badge variant="success">{listeningCount} listeners</Badge>
+            <Badge variant="warning">{remotePeerCount} remote peers</Badge>
+          </>
+        }
         actions={
-          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+          <>
             <SearchInput
               ariaLabel="Search ports by process, PID, address, or port"
               placeholder="Search process, PID, address, or port"
@@ -94,7 +104,7 @@ export function PortsPage() {
               widthClassName="sm:w-80"
               onChange={setSearchValue}
             />
-            <label className="flex min-h-11 items-center gap-2 rounded-2xl border border-border bg-surface px-3 text-sm text-secondary">
+            <label className="flex min-h-9 items-center gap-2 rounded-lg border border-border bg-background px-3 text-sm text-secondary">
               <span>Sort</span>
               <select
                 aria-label="Sort port bindings"
@@ -109,40 +119,119 @@ export function PortsPage() {
                 ))}
               </select>
             </label>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setSortDirection((current) => (current === "desc" ? "asc" : "desc"))}
-            >
+            <Button type="button" variant="secondary" onClick={() => setSortDirection((current) => (current === "desc" ? "asc" : "desc"))}>
               {sortDirection === "desc" ? <ArrowDownAZ className="mr-2 h-4 w-4" /> : <ArrowUpAZ className="mr-2 h-4 w-4" />}
               {sortDirection === "desc" ? "High first" : "Low first"}
             </Button>
-          </div>
+          </>
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-3">
         <SummaryCard label="Visible bindings" value={String(filteredBindings.length)} accent={<Badge variant="info">Filtered</Badge>} />
         <SummaryCard label="Listening ports" value={String(listeningCount)} accent={<Badge variant="success">LISTEN</Badge>} />
         <SummaryCard label="Processes using ports" value={String(uniquePIDCount)} accent={<Badge variant="warning">{remotePeerCount} remote peers</Badge>} />
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <FilterChip active={filter === "all"} label="All" onClick={() => setFilter("all")} />
-        <FilterChip active={filter === "tcp"} label="TCP" onClick={() => setFilter("tcp")} />
-        <FilterChip active={filter === "udp"} label="UDP" onClick={() => setFilter("udp")} />
-        <FilterChip active={filter === "listening"} label="Listening" onClick={() => setFilter("listening")} />
-      </div>
+      <Card className="space-y-0 overflow-hidden p-0">
+        <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:px-5 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <div className="eyebrow">Port table</div>
+            <h2 className="mt-2 text-lg font-semibold tracking-tight text-foreground">Live bindings</h2>
+            <p className="mt-1 text-sm leading-6 text-secondary">Dense network ownership view with filters, sorting, and quick row inspection.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <FilterChip active={filter === "all"} label="All" onClick={() => setFilter("all")} />
+            <FilterChip active={filter === "tcp"} label="TCP" onClick={() => setFilter("tcp")} />
+            <FilterChip active={filter === "udp"} label="UDP" onClick={() => setFilter("udp")} />
+            <FilterChip active={filter === "listening"} label="Listening" onClick={() => setFilter("listening")} />
+          </div>
+        </div>
+
+        {filteredBindings.length === 0 ? (
+          <div className="p-4 sm:p-5">
+            <EmptyState icon={Network} title="No bindings match" description="Try a different process, PID, protocol, state, address, or port filter." />
+          </div>
+        ) : null}
+
+        <div className="grid gap-4 p-4 md:hidden sm:p-5">
+          {filteredBindings.map((binding) => (
+            <PortCard
+              key={bindingKey(binding)}
+              binding={binding}
+              selected={selectedBinding !== null && bindingKey(selectedBinding) === bindingKey(binding)}
+              onDetails={() => setSelectedBinding(binding)}
+            />
+          ))}
+        </div>
+
+        <div className={filteredBindings.length === 0 ? "hidden" : "hidden md:block"}>
+          <table className="dense-table min-w-full table-fixed text-left text-sm">
+            <thead className="border-b border-border bg-background/55">
+              <tr>
+                <th className="w-18 px-4 py-3 pr-3 sm:px-5">Protocol</th>
+                <th className="w-32 py-3 pr-3">Local</th>
+                <th className="w-32 py-3 pr-3">Remote</th>
+                <th className="w-18 py-3 pr-3">State</th>
+                <th className="w-18 py-3 pr-3">PID</th>
+                <th className="py-3 pr-3">Process</th>
+                <th className="w-18 py-3 pr-4 sm:pr-5">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredBindings.map((binding) => (
+                <tr
+                  key={bindingKey(binding)}
+                  className={
+                    selectedBinding !== null && bindingKey(selectedBinding) === bindingKey(binding)
+                      ? "border-b border-border bg-accent-muted/45"
+                      : "border-b border-border transition-colors hover:bg-background/55"
+                  }
+                >
+                  <td className="px-4 py-2.5 pr-3 uppercase text-secondary whitespace-nowrap sm:px-5">{binding.protocol}</td>
+                  <td className="py-2.5 pr-3 text-foreground whitespace-nowrap">{binding.local_addr}:{binding.local_port}</td>
+                  <td className="py-2.5 pr-3 text-secondary whitespace-nowrap">{formatRemote(binding)}</td>
+                  <td className="py-2.5 pr-3 text-secondary whitespace-nowrap">{binding.state || "OPEN"}</td>
+                  <td className="py-2.5 pr-3 font-mono text-secondary whitespace-nowrap">{binding.pid}</td>
+                  <td className="py-2.5 pr-3 text-secondary">
+                    <div className="truncate font-medium text-foreground">{binding.process || binding.label || "Unknown process"}</div>
+                  </td>
+                  <td className="py-2.5 pr-4 sm:pr-5">
+                    <Button size="sm" variant="ghost" onClick={() => setSelectedBinding(binding)}>
+                      Details
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="grid gap-2 border-t border-border p-4 sm:grid-cols-3 sm:p-5 xl:grid-cols-4">
+          {topOwners.map((owner) => (
+            <div key={`${owner.process}-${owner.pid}`} className="soft-panel">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-foreground">{owner.process}</div>
+                  <div className="mt-0.5 text-xs text-secondary">PID {owner.pid}</div>
+                </div>
+                <Badge variant="neutral">{owner.count}</Badge>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
 
       {selectedBinding ? (
-        <Card className="space-y-4">
+        <Card className="space-y-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 className="text-lg font-semibold tracking-tight text-foreground">
+            <div className="min-w-0">
+              <div className="eyebrow">Inspector</div>
+              <h2 className="mt-2 truncate text-lg font-semibold tracking-tight text-foreground">
                 {selectedBinding.process || selectedBinding.label || "Unknown process"}
               </h2>
-              <p className="mt-1 text-sm text-secondary">
-                Local endpoint {selectedBinding.local_addr}:{selectedBinding.local_port}. If a remote peer is present, this row represents an active network connection rather than a passive listener.
+              <p className="mt-1 text-sm leading-6 text-secondary">
+                Local endpoint {selectedBinding.local_addr}:{selectedBinding.local_port}. Remote peer presence usually means an active connection, not just a listener.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -151,62 +240,14 @@ export function PortsPage() {
               <Badge variant="neutral">PID {selectedBinding.pid}</Badge>
             </div>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <DetailTile label="Process" value={selectedBinding.process || selectedBinding.label || "Unknown"} valueClassName="break-words" />
-            <DetailTile label="Local endpoint" value={`${selectedBinding.local_addr}:${selectedBinding.local_port}`} valueClassName="break-all" />
-            <DetailTile label="Remote peer" value={formatRemote(selectedBinding)} valueClassName="break-all" />
-            <DetailTile label="Usage meaning" value={portUsageMeaning(selectedBinding)} valueClassName="leading-snug" />
+          <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
+            <DetailTile label="Process" value={selectedBinding.process || selectedBinding.label || "Unknown"} />
+            <DetailTile label="Local endpoint" value={`${selectedBinding.local_addr}:${selectedBinding.local_port}`} />
+            <DetailTile label="Remote peer" value={formatRemote(selectedBinding)} />
+            <DetailTile label="Usage meaning" value={portUsageMeaning(selectedBinding)} valueClassName="whitespace-normal leading-6" />
           </div>
         </Card>
       ) : null}
-
-      {filteredBindings.length === 0 ? (
-        <EmptyState icon={Network} title="No bindings match" description="Try a different process, PID, protocol, state, address, or port filter." />
-      ) : null}
-
-      <div className="grid gap-4 md:hidden">
-        {filteredBindings.map((binding) => (
-          <PortCard
-            key={bindingKey(binding)}
-            binding={binding}
-            selected={selectedBinding !== null && bindingKey(selectedBinding) === bindingKey(binding)}
-            onDetails={() => setSelectedBinding(binding)}
-          />
-        ))}
-      </div>
-
-      <Card className={filteredBindings.length === 0 ? "hidden" : "hidden overflow-x-auto md:block"}>
-        <table className="min-w-full text-left text-sm">
-          <thead className="text-secondary">
-            <tr>
-              <th className="pb-3 pr-4">Protocol</th>
-              <th className="pb-3 pr-4">Local</th>
-              <th className="pb-3 pr-4">Remote</th>
-              <th className="pb-3 pr-4">State</th>
-              <th className="pb-3 pr-4">PID</th>
-              <th className="pb-3 pr-4">Process</th>
-              <th className="pb-3">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredBindings.map((binding) => (
-              <tr key={bindingKey(binding)} className={selectedBinding !== null && bindingKey(selectedBinding) === bindingKey(binding) ? "border-t border-border bg-background" : "border-t border-border"}>
-                <td className="py-3 pr-4 uppercase text-secondary">{binding.protocol}</td>
-                <td className="py-3 pr-4 text-foreground">{binding.local_addr}:{binding.local_port}</td>
-                <td className="py-3 pr-4 text-secondary">{formatRemote(binding)}</td>
-                <td className="py-3 pr-4 text-secondary">{binding.state || "OPEN"}</td>
-                <td className="py-3 pr-4 font-mono text-secondary">{binding.pid}</td>
-                <td className="py-3 pr-4 text-secondary">{binding.process || binding.label}</td>
-                <td className="py-3">
-                  <Button size="sm" variant="ghost" onClick={() => setSelectedBinding(binding)}>
-                    Details
-                  </Button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
     </div>
   );
 }
@@ -219,7 +260,7 @@ interface PortCardProps {
 
 function PortCard({ binding, selected, onDetails }: PortCardProps) {
   return (
-    <Card className={selected ? "space-y-4 bg-background" : "space-y-4"}>
+    <Card className={selected ? "space-y-3 bg-background" : "space-y-3"}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-lg font-semibold tracking-tight text-foreground">{binding.process || binding.label || "Unknown process"}</div>
@@ -293,4 +334,22 @@ function compareBindings(left: PortBinding, right: PortBinding, sortKey: PortSor
       break;
   }
   return direction === "desc" ? result * -1 : result;
+}
+
+function topBindingOwners(bindings: PortBinding[]) {
+  const counts = new Map<string, { process: string; pid: number; count: number }>();
+  for (const binding of bindings) {
+    const key = `${binding.process || binding.label || "Unknown"}-${binding.pid}`;
+    const current = counts.get(key);
+    if (current) {
+      current.count += 1;
+      continue;
+    }
+    counts.set(key, {
+      process: binding.process || binding.label || "Unknown",
+      pid: binding.pid,
+      count: 1,
+    });
+  }
+  return [...counts.values()].sort((left, right) => right.count - left.count).slice(0, 4);
 }

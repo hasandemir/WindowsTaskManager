@@ -32,12 +32,6 @@ func (w *Welford) StdDev() float64 { return math.Sqrt(w.Variance()) }
 
 func (w *Welford) Count() uint64 { return w.count }
 
-func (w *Welford) Reset() {
-	w.count = 0
-	w.mean = 0
-	w.m2 = 0
-}
-
 // IsAnomaly returns true if value lies more than nSigma standard deviations from the mean.
 func (w *Welford) IsAnomaly(value float64, nSigma float64) bool {
 	if w.count < 10 {

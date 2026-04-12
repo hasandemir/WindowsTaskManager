@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ShieldAlert } from "lucide-react";
+import { BellRing, ShieldAlert } from "lucide-react";
 import { SummaryCard } from "../components/shared/detail-tile";
 import { EmptyState } from "../components/shared/empty-state";
 import { FilterChip } from "../components/shared/filter-chip";
@@ -39,13 +39,23 @@ export function AlertsPage() {
 
   const criticalCount = activeAlerts.filter((alert) => alert.severity === "critical").length;
   const warningCount = activeAlerts.filter((alert) => alert.severity === "warning").length;
+  const infoCount = activeAlerts.filter((alert) => alert.severity === "info").length;
 
   return (
     <>
       <div className="space-y-6">
         <PageHeader
           title="Alerts"
-          description="Current and historical anomaly alerts from the Go engine."
+          description="Current and historical anomaly alerts from the Go engine, separated so urgent signals stay readable."
+          eyebrow="Anomaly stream"
+          icon={ShieldAlert}
+          meta={
+            <>
+              <Badge variant={criticalCount > 0 ? "error" : "success"}>{criticalCount} critical</Badge>
+              <Badge variant={warningCount > 0 ? "warning" : "neutral"}>{warningCount} warning</Badge>
+              <Badge variant="info">{historyAlerts.length} history</Badge>
+            </>
+          }
           actions={
             <SearchInput
               ariaLabel="Search alerts by title, type, severity, or PID"
@@ -75,44 +85,60 @@ export function AlertsPage() {
           />
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <FilterChip active={filter === "all"} label="All" onClick={() => setFilter("all")} />
-          <FilterChip active={filter === "critical"} label="Critical" onClick={() => setFilter("critical")} />
-          <FilterChip active={filter === "warning"} label="Warning" onClick={() => setFilter("warning")} />
-          <FilterChip active={filter === "info"} label="Info" onClick={() => setFilter("info")} />
-        </div>
-
         {filteredActive.length === 0 && filteredHistory.length === 0 ? (
           <EmptyState icon={ShieldAlert} title="No alerts match" description="Try a different title, PID, severity, or type filter." />
         ) : null}
 
-        <Card className={filteredActive.length === 0 ? "hidden" : "space-y-4"}>
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-lg font-semibold tracking-tight text-foreground">Active</h2>
-            <Badge variant={warningCount > 0 ? "warning" : "info"}>{filteredActive.length} shown</Badge>
+        <Card className="space-y-0 overflow-hidden p-0">
+          <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:px-5 xl:flex-row xl:items-center xl:justify-between">
+            <div>
+              <div className="eyebrow">Alert queue</div>
+              <h2 className="mt-2 text-lg font-semibold tracking-tight text-foreground">Active and recent alerts</h2>
+              <p className="mt-1 text-sm leading-6 text-secondary">Triage active signals first, then use recent history as context instead of letting every alert compete for attention.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <FilterChip active={filter === "all"} label="All" onClick={() => setFilter("all")} />
+              <FilterChip active={filter === "critical"} label="Critical" onClick={() => setFilter("critical")} />
+              <FilterChip active={filter === "warning"} label="Warning" onClick={() => setFilter("warning")} />
+              <FilterChip active={filter === "info"} label="Info" onClick={() => setFilter("info")} />
+            </div>
           </div>
-          <div className="space-y-3">
-            {filteredActive.map((alert) => (
-              <AlertRow
-                key={`${alert.type}-${alert.pid ?? "global"}-${alert.title}`}
-                alert={alert}
-                isPending={alertActionMutation.isPending}
-                onDismiss={() => setDismissCandidate(alert)}
-                onSnooze={() => alertActionMutation.mutate({ type: alert.type, pid: alert.pid, action: "snooze" })}
-              />
-            ))}
-          </div>
-        </Card>
 
-        <Card className={filteredHistory.length === 0 ? "hidden" : "space-y-4"}>
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-lg font-semibold tracking-tight text-foreground">History</h2>
-            <Badge variant="info">{filteredHistory.length} recent matches</Badge>
+          <div className="grid gap-px border-b border-border bg-border sm:grid-cols-3">
+            <SeverityRow label="Critical" value={criticalCount} variant="error" />
+            <SeverityRow label="Warning" value={warningCount} variant="warning" />
+            <SeverityRow label="Info" value={infoCount} variant="info" />
           </div>
-          <div className="space-y-3">
-            {filteredHistory.map((alert) => (
-              <AlertRow key={`${alert.type}-${alert.pid ?? "global"}-${alert.title}`} alert={alert} />
-            ))}
+
+          <div className={filteredActive.length === 0 ? "hidden" : "space-y-2"}>
+            <div className="flex items-center justify-between gap-3 px-4 pt-4 sm:px-5">
+              <h2 className="section-title">Active</h2>
+              <Badge variant={warningCount > 0 ? "warning" : "info"}>{filteredActive.length} shown</Badge>
+            </div>
+            <div className="overflow-hidden border-y border-border bg-background">
+              {filteredActive.map((alert, index) => (
+                <AlertRow
+                  key={`${alert.type}-${alert.pid ?? "global"}-${alert.title}`}
+                  alert={alert}
+                  isPending={alertActionMutation.isPending}
+                  isLast={index === filteredActive.length - 1}
+                  onDismiss={() => setDismissCandidate(alert)}
+                  onSnooze={() => alertActionMutation.mutate({ type: alert.type, pid: alert.pid, action: "snooze" })}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className={filteredHistory.length === 0 ? "hidden" : "space-y-2"}>
+            <div className="flex items-center justify-between gap-3 px-4 pt-4 sm:px-5">
+              <h2 className="section-title">History</h2>
+              <Badge variant="info">{filteredHistory.length} recent matches</Badge>
+            </div>
+            <div className="overflow-hidden border-y border-border bg-background">
+              {filteredHistory.map((alert, index) => (
+                <AlertRow key={`${alert.type}-${alert.pid ?? "global"}-${alert.title}`} alert={alert} isLast={index === filteredHistory.length - 1} />
+              ))}
+            </div>
           </div>
         </Card>
       </div>
@@ -153,38 +179,57 @@ export function AlertsPage() {
 interface AlertRowProps {
   alert: AlertItem;
   isPending?: boolean;
+  isLast?: boolean;
   onDismiss?: () => void;
   onSnooze?: () => void;
 }
 
-function AlertRow({ alert, isPending = false, onDismiss, onSnooze }: AlertRowProps) {
+function AlertRow({ alert, isPending = false, isLast = false, onDismiss, onSnooze }: AlertRowProps) {
   const variant = alert.severity === "critical" ? "error" : alert.severity === "warning" ? "warning" : "info";
 
   return (
-    <div className="rounded-2xl border border-border bg-background p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
+    <div className={`grid gap-3 px-4 py-3 lg:grid-cols-[minmax(0,1fr)_auto] ${isLast ? "" : "border-b border-border"}`}>
+      <div className="min-w-0 space-y-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <Badge variant={variant}>{alert.severity}</Badge>
           <Badge variant="neutral">{alert.type}</Badge>
           {alert.pid ? <Badge variant="neutral">PID {alert.pid}</Badge> : null}
-          <div className="text-sm font-semibold text-foreground">{alert.title}</div>
+          <div className="min-w-0 truncate text-sm font-semibold text-foreground">{alert.title}</div>
         </div>
-        {onDismiss || onSnooze ? (
-          <div className="flex flex-wrap gap-2">
-            {onSnooze ? (
-              <Button type="button" size="sm" variant="secondary" disabled={isPending} onClick={onSnooze}>
-                Snooze 30m
-              </Button>
-            ) : null}
-            {onDismiss ? (
-              <Button type="button" size="sm" variant="ghost" disabled={isPending} onClick={onDismiss}>
-                Dismiss
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
+        <p className="text-sm leading-5 text-secondary">{alert.description}</p>
       </div>
-      <p className="mt-2 text-sm text-secondary">{alert.description}</p>
+      {onDismiss || onSnooze ? (
+        <div className="flex flex-wrap items-start gap-2 lg:justify-end">
+          {onSnooze ? (
+            <Button type="button" size="sm" variant="secondary" disabled={isPending} onClick={onSnooze}>
+              Snooze 30m
+            </Button>
+          ) : null}
+          {onDismiss ? (
+            <Button type="button" size="sm" variant="ghost" disabled={isPending} onClick={onDismiss}>
+              Dismiss
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+interface SeverityRowProps {
+  label: string;
+  value: number;
+  variant: "info" | "warning" | "error";
+}
+
+function SeverityRow({ label, value, variant }: SeverityRowProps) {
+  return (
+    <div className="flex items-center justify-between gap-3 bg-surface px-4 py-3 sm:px-5">
+      <div className="flex min-w-0 items-center gap-2">
+        <BellRing className="h-4 w-4 text-accent" />
+        <span className="truncate text-sm font-semibold text-foreground">{label}</span>
+      </div>
+      <Badge variant={variant}>{value}</Badge>
     </div>
   );
 }

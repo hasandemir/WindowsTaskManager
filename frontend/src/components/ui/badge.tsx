@@ -9,12 +9,12 @@ export function Badge({ children, variant = "neutral" }: BadgeProps) {
   return (
     <span
       className={cn(
-        "inline-flex min-h-9 items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold",
-        variant === "neutral" && "bg-background-muted text-secondary",
-        variant === "info" && "bg-[color:var(--info-bg)] text-info",
-        variant === "success" && "bg-[color:var(--success-bg)] text-success",
-        variant === "warning" && "bg-[color:var(--warning-bg)] text-warning",
-        variant === "error" && "bg-[color:var(--error-bg)] text-error",
+        "inline-flex min-h-6 max-w-full items-center gap-1 rounded-md border px-2 py-0.5 text-[0.67rem] font-semibold whitespace-nowrap",
+        variant === "neutral" && "border-border bg-background-muted/75 text-secondary",
+        variant === "info" && "border-[color:var(--info-bg)] bg-[color:var(--info-bg)] text-info",
+        variant === "success" && "border-[color:var(--success-bg)] bg-[color:var(--success-bg)] text-success",
+        variant === "warning" && "border-[color:var(--warning-bg)] bg-[color:var(--warning-bg)] text-warning",
+        variant === "error" && "border-[color:var(--error-bg)] bg-[color:var(--error-bg)] text-error",
       )}
     >
       {children}

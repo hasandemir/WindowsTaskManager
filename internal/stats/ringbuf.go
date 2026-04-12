@@ -47,38 +47,3 @@ func (rb *RingBuffer[T]) Len() int {
 	defer rb.mu.RUnlock()
 	return rb.count
 }
-
-func (rb *RingBuffer[T]) Cap() int { return rb.capacity }
-
-func (rb *RingBuffer[T]) Last() (T, bool) {
-	rb.mu.RLock()
-	defer rb.mu.RUnlock()
-	var zero T
-	if rb.count == 0 {
-		return zero, false
-	}
-	idx := (rb.head - 1 + rb.capacity) % rb.capacity
-	return rb.data[idx], true
-}
-
-func (rb *RingBuffer[T]) Reset() {
-	rb.mu.Lock()
-	rb.head = 0
-	rb.count = 0
-	rb.mu.Unlock()
-}
-
-// SlidingWindow is a count-based sliding window built on RingBuffer.
-type SlidingWindow[T any] struct {
-	buf *RingBuffer[T]
-}
-
-func NewSlidingWindow[T any](maxSize int) *SlidingWindow[T] {
-	return &SlidingWindow[T]{buf: NewRingBuffer[T](maxSize)}
-}
-
-func (sw *SlidingWindow[T]) Add(item T) { sw.buf.Add(item) }
-func (sw *SlidingWindow[T]) Slice() []T { return sw.buf.Slice() }
-func (sw *SlidingWindow[T]) Len() int   { return sw.buf.Len() }
-func (sw *SlidingWindow[T]) Cap() int   { return sw.buf.Cap() }
-func (sw *SlidingWindow[T]) Reset()     { sw.buf.Reset() }

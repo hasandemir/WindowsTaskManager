@@ -12,6 +12,10 @@ interface ApiErrorShape {
   details?: string;
 }
 
+interface ApiErrorEnvelope {
+  error?: ApiErrorShape;
+}
+
 class ApiError extends Error {
   code?: string;
   details?: string;
@@ -22,6 +26,21 @@ class ApiError extends Error {
     this.code = code;
     this.details = details;
   }
+}
+
+export function extractApiErrorShape(payload: unknown): ApiErrorShape {
+  if (!payload || typeof payload !== "object") {
+    return {};
+  }
+  const direct = payload as ApiErrorShape;
+  if (direct.message || direct.code || direct.details) {
+    return direct;
+  }
+  const nested = (payload as ApiErrorEnvelope).error;
+  if (nested && typeof nested === "object") {
+    return nested;
+  }
+  return {};
 }
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -42,7 +61,7 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
     let details: string | undefined;
 
     if (contentType.includes("application/json")) {
-      const payload = (await response.json()) as ApiErrorShape;
+      const payload = extractApiErrorShape(await response.json());
       message = payload.message ?? message;
       code = payload.code;
       details = payload.details;

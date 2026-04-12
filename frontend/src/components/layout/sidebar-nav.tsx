@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { Bot, Boxes, Cpu, GitBranch, HardDrive, Info, Network, Settings, ShieldAlert, Workflow } from "lucide-react";
+import { Bot, Boxes, Cpu, GitBranch, HardDrive, Info, Network, Settings, ShieldAlert, Sparkles, Workflow } from "lucide-react";
 import { NavLink } from "react-router";
 import type { AppRoutePath } from "../../app/route-map";
 import { prefetchRoute } from "../../app/route-map";
@@ -31,12 +31,21 @@ const navItems: NavItem[] = [
 export function SidebarNav({ onNavigate }: SidebarNavProps) {
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-border px-5 py-5">
-        <div className="text-xs font-medium uppercase tracking-[0.24em] text-secondary">Windows Task Manager</div>
-        <div className="mt-2 text-2xl font-semibold tracking-tight text-foreground">WTM</div>
-        <div className="mt-1 text-sm text-secondary">Local system monitor and operator console</div>
+      <div className="border-b border-border px-3.5 py-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-[0.65rem] border border-border bg-surface text-accent">
+            <Sparkles className="h-3 w-3" />
+          </div>
+          <div>
+            <div className="text-[0.68rem] font-medium uppercase tracking-[0.18em] text-secondary">Windows Task Manager</div>
+            <div className="mt-0.5 text-[1.05rem] font-semibold tracking-tight text-foreground">WTM</div>
+          </div>
+        </div>
+        <div className="mt-3 border-l-2 border-accent/45 pl-3 text-[0.8rem] leading-5 text-secondary">
+          Local operator console for process triage, rules, alerts, ports, and guarded actions.
+        </div>
       </div>
-      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
+      <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-3">
         {navItems.map((item) => {
           const Icon = item.icon;
           return (
@@ -48,22 +57,25 @@ export function SidebarNav({ onNavigate }: SidebarNavProps) {
               onMouseEnter={() => prefetchRoute(item.to)}
               className={({ isActive }) =>
                 cn(
-                  "flex min-h-11 items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium text-secondary transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                  "flex min-h-9 items-center gap-2.5 rounded-[0.7rem] px-2.5 py-2 text-[0.88rem] font-medium text-secondary transition-colors focus-visible:ring-2 focus-visible:ring-[var(--ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-background",
                   "hover:bg-background-muted hover:text-foreground",
-                  isActive && "bg-surface text-foreground shadow-sm ring-1 ring-border",
+                  isActive && "bg-surface text-foreground ring-1 ring-border",
                 )
               }
             >
-              <Icon className="h-4 w-4 shrink-0" />
+              <div className={cn("flex h-6.5 w-6.5 items-center justify-center rounded-[0.55rem] bg-background-muted text-secondary")}>
+                <Icon className="h-3.25 w-3.25 shrink-0" />
+              </div>
               <span>{item.label}</span>
             </NavLink>
           );
         })}
       </nav>
-      <div className="border-t border-border px-4 py-4">
-        <div className="flex items-center gap-2 rounded-xl bg-accent-muted px-3 py-3 text-sm text-secondary">
-          <Settings className="h-4 w-4 text-accent" />
-          Localhost operator console
+      <div className="border-t border-border px-3.5 py-3.5">
+        <div className="rounded-[0.8rem] border border-border bg-surface px-3 py-2.5">
+          <div className="eyebrow">Local service</div>
+          <div className="mt-1.5 text-sm font-semibold text-foreground">localhost operator console</div>
+          <div className="mt-1 text-[0.8rem] leading-5 text-secondary">Realtime stream first, polling fallback when transport blinks.</div>
         </div>
       </div>
     </div>

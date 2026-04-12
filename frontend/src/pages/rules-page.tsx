@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { Pencil, Plus, Save, Trash2, Workflow, X } from "lucide-react";
 import { ConfirmDialog } from "../components/shared/confirm-dialog";
-import { DetailTile } from "../components/shared/detail-tile";
+import { DetailTile, SummaryCard } from "../components/shared/detail-tile";
 import { EmptyState } from "../components/shared/empty-state";
 import { PageHeader } from "../components/shared/page-header";
 import { PageSkeleton } from "../components/shared/page-skeleton";
@@ -65,7 +65,7 @@ const ruleTemplates: Array<{ label: string; description: string; draft: Rule }> 
     draft: {
       ...defaultRuleDraft,
       name: "Thread explosion",
-      match: "*.exe",
+      match: ".exe",
       metric: "thread_count",
       op: ">=",
       threshold: 300,
@@ -122,11 +122,22 @@ export function RulesPage() {
     return <PageSkeleton />;
   }
 
+  const enabledRules = rules.filter((rule) => rule.enabled).length;
+  const actionRules = rules.filter((rule) => rule.action !== "alert").length;
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Rules"
-        description="Create, review, and tune automation rules loaded from the backend."
+        description="Create, review, and tune backend automation rules without losing control of what they do."
+        eyebrow="Automation"
+        icon={Workflow}
+        meta={
+          <>
+            <Badge variant="info">{rules.length} total rules</Badge>
+            <Badge variant={enabledRules > 0 ? "success" : "neutral"}>{enabledRules} enabled</Badge>
+          </>
+        }
         actions={
           <SearchInput
             ariaLabel="Search rules by name, match, metric, or action"
@@ -137,63 +148,89 @@ export function RulesPage() {
         }
       />
 
-      <Card className="space-y-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold tracking-tight text-foreground">Add rule</h2>
-            <p className="text-sm text-secondary">Define what to watch, how long it must hold, and what WTM should do when it trips.</p>
-          </div>
-          <Badge variant="info">Automation</Badge>
-        </div>
+      <div className="grid gap-4 sm:grid-cols-3">
+        <SummaryCard label="Rules" value={String(rules.length)} accent={<Badge variant="info">Configured</Badge>} />
+        <SummaryCard label="Enabled" value={String(enabledRules)} accent={<Badge variant={enabledRules > 0 ? "success" : "neutral"}>Live</Badge>} />
+        <SummaryCard label="Actions beyond alerts" value={String(actionRules)} accent={<Badge variant="warning">Suspend / kill</Badge>} />
+      </div>
 
-        <div className="grid gap-3 lg:grid-cols-3">
-          {ruleTemplates.map((template) => (
-            <button
-              key={template.label}
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_22rem]">
+        <Card className="space-y-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold tracking-tight text-foreground">Add rule</h2>
+              <p className="text-sm text-secondary">Define what to watch, how long it must hold, and what WTM should do when it trips.</p>
+            </div>
+            <Badge variant="info">Automation</Badge>
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-3">
+            {ruleTemplates.map((template) => (
+              <button
+                key={template.label}
+                type="button"
+                className="rounded-lg border border-border bg-background px-4 py-3 text-left transition-colors hover:bg-background-muted"
+                onClick={() => {
+                  setDraft(template.draft);
+                  setDraftError("");
+                }}
+              >
+                <div className="text-sm font-semibold text-foreground">{template.label}</div>
+                <div className="mt-2 text-sm text-secondary">{template.description}</div>
+              </button>
+            ))}
+          </div>
+
+          <RuleForm draft={draft} onChange={setDraft} />
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <RulePreview draft={draft} />
+            <div className="soft-panel">
+              <div className="metric-label">What happens</div>
+              <div className="mt-2 text-sm leading-relaxed text-secondary">
+                Alert-only rules are safest. Suspend and kill are stronger actions and are best for high-confidence, noisy patterns.
+              </div>
+            </div>
+          </div>
+
+          {draftError ? <ErrorBanner>{draftError}</ErrorBanner> : null}
+
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
               type="button"
-              className="rounded-2xl border border-border bg-background px-4 py-4 text-left transition-colors hover:bg-background-muted"
+              disabled={updateRulesMutation.isPending}
               onClick={() => {
-                setDraft(template.draft);
+                const error = validateRuleDraft(draft, rules);
+                if (error) {
+                  setDraftError(error);
+                  return;
+                }
+
                 setDraftError("");
+                updateRulesMutation.mutate([...rules, normalizeRuleDraft(draft)], {
+                  onSuccess: () => {
+                    setDraft(defaultRuleDraft);
+                  },
+                });
               }}
             >
-              <div className="text-sm font-semibold text-foreground">{template.label}</div>
-              <div className="mt-2 text-sm text-secondary">{template.description}</div>
-            </button>
-          ))}
-        </div>
+              <Plus className="mr-2 h-4 w-4" />
+              Add rule
+            </Button>
+            <span className="text-sm text-secondary">Rules are saved to the backend config immediately.</span>
+          </div>
+        </Card>
 
-        <RuleForm draft={draft} onChange={setDraft} />
-
-        <RulePreview draft={draft} />
-
-        {draftError ? <ErrorBanner>{draftError}</ErrorBanner> : null}
-
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
-            type="button"
-            disabled={updateRulesMutation.isPending}
-            onClick={() => {
-              const error = validateRuleDraft(draft, rules);
-              if (error) {
-                setDraftError(error);
-                return;
-              }
-
-              setDraftError("");
-              updateRulesMutation.mutate([...rules, normalizeRuleDraft(draft)], {
-                onSuccess: () => {
-                  setDraft(defaultRuleDraft);
-                },
-              });
-            }}
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            Add rule
-          </Button>
-          <span className="text-sm text-secondary">Rules are saved to the backend config immediately.</span>
-        </div>
-      </Card>
+        <Card className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="section-title">Operator guide</h2>
+            <Badge variant="neutral">Tips</Badge>
+          </div>
+          <GuideRow title="Start broad, then tighten" description="Match on a process family first, then narrow thresholds after you observe a few cycles." />
+          <GuideRow title="Use cooldowns" description="Cooldown protects you from repeated triggers and keeps alerts or actions from thrashing." />
+          <GuideRow title="Prefer alert before action" description="If you are not fully sure, ship an alert-only rule first and promote it later." />
+        </Card>
+      </div>
 
       {filteredRules.length === 0 ? (
         <EmptyState
@@ -211,7 +248,8 @@ export function RulesPage() {
             <Card key={rule.name} className="space-y-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-lg font-semibold tracking-tight text-foreground">{rule.name}</h2>
+                  <div className="eyebrow">Saved rule</div>
+                  <h2 className="mt-2 text-lg font-semibold tracking-tight text-foreground">{rule.name}</h2>
                   <p className="mt-1 text-sm text-secondary">{describeRule(rule)}</p>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-2">
@@ -307,7 +345,7 @@ export function RulesPage() {
                   {editingError ? <ErrorBanner>{editingError}</ErrorBanner> : null}
                 </>
               ) : (
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                   <DetailTile label="Match" value={rule.match} valueClassName="break-words" />
                   <DetailTile label="Metric" value={formatRuleMetric(rule)} valueClassName="break-words" />
                   <DetailTile label="Action" value={rule.action} valueClassName="break-words" />
@@ -373,25 +411,25 @@ function RuleForm({ draft, onChange }: RuleFormProps) {
         <Field label="Rule name">
           <input
             aria-label="Rule name"
-            className="h-11 rounded-xl border border-border bg-background px-3 text-sm text-foreground"
+            className="form-control w-full"
             placeholder="High CPU browser tabs"
             value={draft.name}
             onChange={(event) => onChange({ ...draft, name: event.target.value })}
           />
         </Field>
-        <Field label="Process match">
+        <Field label="Rule match">
           <input
             aria-label="Rule match"
-            className="h-11 rounded-xl border border-border bg-background px-3 text-sm text-foreground"
-            placeholder="chrome.exe"
+            className="form-control w-full"
+            placeholder="chrome.exe or .exe"
             value={draft.match}
             onChange={(event) => onChange({ ...draft, match: event.target.value })}
           />
         </Field>
-        <Field label="Metric">
+        <Field label="Rule metric">
           <select
             aria-label="Rule metric"
-            className="h-11 rounded-xl border border-border bg-background px-3 text-sm text-foreground"
+            className="form-control w-full"
             value={draft.metric}
             onChange={(event) => onChange({ ...draft, metric: event.target.value })}
           >
@@ -401,10 +439,10 @@ function RuleForm({ draft, onChange }: RuleFormProps) {
             <option value="thread_count">Thread count</option>
           </select>
         </Field>
-        <Field label="Operator">
+        <Field label="Rule operator">
           <select
             aria-label="Rule operator"
-            className="h-11 rounded-xl border border-border bg-background px-3 text-sm text-foreground"
+            className="form-control w-full"
             value={draft.op}
             onChange={(event) => onChange({ ...draft, op: event.target.value })}
           >
@@ -414,7 +452,7 @@ function RuleForm({ draft, onChange }: RuleFormProps) {
             <option value="<">{"<"}</option>
           </select>
         </Field>
-        <Field label="Threshold">
+        <Field label="Rule threshold">
           {isByteMetric ? (
             <div className="flex gap-2">
               <input
@@ -422,13 +460,13 @@ function RuleForm({ draft, onChange }: RuleFormProps) {
                 type="number"
                 min={0}
                 step="any"
-                className="h-11 min-w-0 flex-1 rounded-xl border border-border bg-background px-3 text-sm text-foreground"
+                className="form-control min-w-0 flex-1"
                 value={formatThresholdForInput(draft.threshold, thresholdUnit)}
                 onChange={(event) => onChange({ ...draft, threshold: parseThresholdInput(event.target.value, thresholdUnit) })}
               />
               <select
                 aria-label="Rule threshold unit"
-                className="h-11 rounded-xl border border-border bg-background px-3 text-sm text-foreground"
+                className="form-control"
                 value={thresholdUnit}
                 onChange={(event) => setThresholdUnit(event.target.value as ThresholdUnit)}
               >
@@ -442,16 +480,16 @@ function RuleForm({ draft, onChange }: RuleFormProps) {
             <input
               aria-label="Rule threshold"
               type="number"
-              className="h-11 rounded-xl border border-border bg-background px-3 text-sm text-foreground"
+              className="form-control w-full"
               value={draft.threshold}
               onChange={(event) => onChange({ ...draft, threshold: Number(event.target.value) || 0 })}
             />
           )}
         </Field>
-        <Field label="Action">
+        <Field label="Rule action">
           <select
             aria-label="Rule action"
-            className="h-11 rounded-xl border border-border bg-background px-3 text-sm text-foreground"
+            className="form-control w-full"
             value={draft.action}
             onChange={(event) => onChange({ ...draft, action: event.target.value })}
           >
@@ -460,37 +498,32 @@ function RuleForm({ draft, onChange }: RuleFormProps) {
             <option value="kill">Kill process</option>
           </select>
         </Field>
-        <Field label="For seconds">
+        <Field label="Rule for seconds">
           <input
             aria-label="Rule for seconds"
             type="number"
             min={0}
             max={86400}
-            className="h-11 rounded-xl border border-border bg-background px-3 text-sm text-foreground"
+            className="form-control w-full"
             value={draft.for_seconds}
             onChange={(event) => onChange({ ...draft, for_seconds: Number(event.target.value) || 0 })}
           />
         </Field>
-        <Field label="Cooldown seconds">
+        <Field label="Rule cooldown seconds">
           <input
             aria-label="Rule cooldown seconds"
             type="number"
             min={0}
-            className="h-11 rounded-xl border border-border bg-background px-3 text-sm text-foreground"
+            className="form-control w-full"
             value={draft.cooldown_seconds}
             onChange={(event) => onChange({ ...draft, cooldown_seconds: Number(event.target.value) || 0 })}
           />
         </Field>
       </div>
 
-      <label className="flex min-h-11 items-center justify-between rounded-2xl border border-border bg-background px-4 py-3 text-sm text-foreground">
+      <label className="flex min-h-10 items-center justify-between rounded-lg border border-border bg-background px-4 py-3 text-sm text-foreground">
         <span>Rule enabled immediately</span>
-        <input
-          aria-label="Rule enabled"
-          type="checkbox"
-          checked={draft.enabled}
-          onChange={(event) => onChange({ ...draft, enabled: event.target.checked })}
-        />
+        <input aria-label="Rule enabled" type="checkbox" checked={draft.enabled} onChange={(event) => onChange({ ...draft, enabled: event.target.checked })} />
       </label>
     </>
   );
@@ -512,15 +545,29 @@ function Field({ label, children }: FieldProps) {
 
 function RulePreview({ draft }: { draft: Rule }) {
   return (
-    <div className="rounded-2xl border border-border bg-background px-4 py-4">
-      <div className="text-xs font-medium uppercase tracking-[0.18em] text-secondary">Preview</div>
+    <div className="soft-panel">
+      <div className="metric-label">Preview</div>
       <div className="mt-2 text-sm text-foreground">{describeRule(draft)}</div>
     </div>
   );
 }
 
 function ErrorBanner({ children }: { children: ReactNode }) {
-  return <div className="rounded-2xl border border-[color:var(--error-border)] bg-[color:var(--error-bg)] px-4 py-3 text-sm text-error">{children}</div>;
+  return <div className="rounded-lg border border-error bg-[color:var(--error-bg)] px-4 py-3 text-sm text-error">{children}</div>;
+}
+
+interface GuideRowProps {
+  title: string;
+  description: string;
+}
+
+function GuideRow({ title, description }: GuideRowProps) {
+  return (
+    <div className="soft-panel">
+      <div className="text-sm font-semibold text-foreground">{title}</div>
+      <div className="mt-1 text-sm leading-relaxed text-secondary">{description}</div>
+    </div>
+  );
 }
 
 function validateRuleDraft(draft: Rule, existingRules: Rule[], originalName?: string) {

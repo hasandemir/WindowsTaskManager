@@ -94,3 +94,18 @@ func TestServeStaticInjectsCSRFMToken(t *testing.T) {
 		t.Fatalf("csrf token was not injected: %q", rr.Body.String())
 	}
 }
+
+func TestContentTypeForFrontendAssets(t *testing.T) {
+	cases := map[string]string{
+		"index.css":  "text/css; charset=utf-8",
+		"app.js":     "application/javascript; charset=utf-8",
+		"font.woff2": "font/woff2",
+		"font.woff":  "font/woff",
+		"image.webp": "image/webp",
+	}
+	for name, want := range cases {
+		if got := contentTypeFor(name); got != want {
+			t.Fatalf("contentTypeFor(%q)=%q want %q", name, got, want)
+		}
+	}
+}

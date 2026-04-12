@@ -35,7 +35,6 @@ var (
 	procSetPriorityClass           = kernel32.NewProc("SetPriorityClass")
 	procGetPriorityClass           = kernel32.NewProc("GetPriorityClass")
 	procSetProcessAffinityMask     = kernel32.NewProc("SetProcessAffinityMask")
-	procGetProcessAffinityMask     = kernel32.NewProc("GetProcessAffinityMask")
 	procCreateJobObjectW           = kernel32.NewProc("CreateJobObjectW")
 	procAssignProcessToJobObject   = kernel32.NewProc("AssignProcessToJobObject")
 	procSetInformationJobObject    = kernel32.NewProc("SetInformationJobObject")
@@ -76,7 +75,6 @@ var (
 
 // user32 procs
 var (
-	procIsHungAppWindow     = user32.NewProc("IsHungAppWindow")
 	procDefWindowProcW      = user32.NewProc("DefWindowProcW")
 	procRegisterClassExW    = user32.NewProc("RegisterClassExW")
 	procCreateWindowExW     = user32.NewProc("CreateWindowExW")

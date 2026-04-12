@@ -75,22 +75,6 @@ func (e *Engine) SetActuator(a ProcessActuator) {
 	e.mu.Unlock()
 }
 
-// Detectors returns the registered detector list.
-func (e *Engine) Detectors() []Detector {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	out := make([]Detector, len(e.detectors))
-	copy(out, e.detectors)
-	return out
-}
-
-// Register adds a custom detector.
-func (e *Engine) Register(d Detector) {
-	e.mu.Lock()
-	e.detectors = append(e.detectors, d)
-	e.mu.Unlock()
-}
-
 // SetConfig hot-swaps the active config.
 func (e *Engine) SetConfig(cfg *config.Config) {
 	e.mu.Lock()

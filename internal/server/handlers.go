@@ -250,7 +250,7 @@ func (s *Server) handleProcessTree(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProcessByID(w http.ResponseWriter, r *http.Request) {
-	pid, ok := parseUint32Param(w, r, "pid")
+	pid, ok := parsePIDParam(w, r)
 	if !ok {
 		return
 	}
@@ -269,7 +269,7 @@ func (s *Server) handleProcessByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProcessHistory(w http.ResponseWriter, r *http.Request) {
-	pid, ok := parseUint32Param(w, r, "pid")
+	pid, ok := parsePIDParam(w, r)
 	if !ok {
 		return
 	}
@@ -277,7 +277,7 @@ func (s *Server) handleProcessHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProcessChildren(w http.ResponseWriter, r *http.Request) {
-	pid, ok := parseUint32Param(w, r, "pid")
+	pid, ok := parsePIDParam(w, r)
 	if !ok {
 		return
 	}
@@ -296,7 +296,7 @@ func (s *Server) handleProcessChildren(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProcessConnections(w http.ResponseWriter, r *http.Request) {
-	pid, ok := parseUint32Param(w, r, "pid")
+	pid, ok := parsePIDParam(w, r)
 	if !ok {
 		return
 	}
@@ -315,7 +315,7 @@ func (s *Server) handleProcessConnections(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
-	pid, ok := parseUint32Param(w, r, "pid")
+	pid, ok := parsePIDParam(w, r)
 	if !ok {
 		return
 	}
@@ -328,7 +328,7 @@ func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleKillTree(w http.ResponseWriter, r *http.Request) {
-	pid, ok := parseUint32Param(w, r, "pid")
+	pid, ok := parsePIDParam(w, r)
 	if !ok {
 		return
 	}
@@ -342,7 +342,7 @@ func (s *Server) handleKillTree(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSuspend(w http.ResponseWriter, r *http.Request) {
-	pid, ok := parseUint32Param(w, r, "pid")
+	pid, ok := parsePIDParam(w, r)
 	if !ok {
 		return
 	}
@@ -354,7 +354,7 @@ func (s *Server) handleSuspend(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
-	pid, ok := parseUint32Param(w, r, "pid")
+	pid, ok := parsePIDParam(w, r)
 	if !ok {
 		return
 	}
@@ -366,7 +366,7 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePriority(w http.ResponseWriter, r *http.Request) {
-	pid, ok := parseUint32Param(w, r, "pid")
+	pid, ok := parsePIDParam(w, r)
 	if !ok {
 		return
 	}
@@ -384,7 +384,7 @@ func (s *Server) handlePriority(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAffinity(w http.ResponseWriter, r *http.Request) {
-	pid, ok := parseUint32Param(w, r, "pid")
+	pid, ok := parsePIDParam(w, r)
 	if !ok {
 		return
 	}
@@ -402,7 +402,7 @@ func (s *Server) handleAffinity(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLimit(w http.ResponseWriter, r *http.Request) {
-	pid, ok := parseUint32Param(w, r, "pid")
+	pid, ok := parsePIDParam(w, r)
 	if !ok {
 		return
 	}
@@ -421,7 +421,7 @@ func (s *Server) handleLimit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleClearLimit(w http.ResponseWriter, r *http.Request) {
-	pid, ok := parseUint32Param(w, r, "pid")
+	pid, ok := parsePIDParam(w, r)
 	if !ok {
 		return
 	}
@@ -682,10 +682,20 @@ func contentTypeFor(name string) string {
 		return "application/json"
 	case ".svg":
 		return "image/svg+xml"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
 	case ".png":
 		return "image/png"
+	case ".webp":
+		return "image/webp"
 	case ".ico":
 		return "image/x-icon"
+	case ".map":
+		return "application/json"
+	case ".woff":
+		return "font/woff"
+	case ".woff2":
+		return "font/woff2"
 	}
 	return "application/octet-stream"
 }

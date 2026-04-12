@@ -52,26 +52,29 @@ export function LiveStrip() {
   }
 
   return (
-    <section className="page-padding mt-4">
-      <div className="grid gap-3 rounded-3xl border border-border bg-background-subtle p-3 shadow-sm md:grid-cols-2 xl:grid-cols-[repeat(5,minmax(0,1fr))_16rem]">
-        <Pill label="CPU" value={`${data.cpu.total_percent.toFixed(1)}%`} detail={`${data.cpu.num_logical} logical cores`} />
-        <Pill
-          label="Memory"
-          value={`${data.memory.used_percent.toFixed(1)}%`}
-          detail={`${formatBytes(data.memory.used_phys)} of ${formatBytes(data.memory.total_phys)}`}
-        />
-        <Pill
-          label="GPU"
-          value={data.gpu.available ? `${data.gpu.utilization.toFixed(0)}%` : "n/a"}
-          detail={data.gpu.available ? data.gpu.name || "Graphics processor" : "GPU unavailable"}
-        />
-        <Pill label="Network" value={networkLabel} detail={activeInterface?.name ?? "All interfaces"} />
-        <Pill label="Processes" value={String(data.processes.length)} detail="Tracked right now" />
-        <label className="flex min-h-[5.75rem] min-w-0 flex-col justify-center gap-2 rounded-2xl border border-border bg-surface px-4 py-3 text-xs text-secondary">
-          <span className="font-mono uppercase tracking-[0.18em]">Interface</span>
+    <section className="page-padding mt-3">
+      <div className="shell-panel overflow-hidden">
+        <div className="grid gap-px bg-border md:grid-cols-2 2xl:grid-cols-[repeat(5,minmax(0,1fr))_14rem]">
+          <Pill label="CPU" value={`${data.cpu.total_percent.toFixed(1)}%`} detail={`${data.cpu.num_logical} logical cores`} meter={data.cpu.total_percent} />
+          <Pill
+            label="Memory"
+            value={`${data.memory.used_percent.toFixed(1)}%`}
+            detail={`${formatBytes(data.memory.used_phys)} of ${formatBytes(data.memory.total_phys)}`}
+            meter={data.memory.used_percent}
+          />
+          <Pill
+            label="GPU"
+            value={data.gpu.available ? `${data.gpu.utilization.toFixed(0)}%` : "n/a"}
+            detail={data.gpu.available ? data.gpu.name || "Graphics processor" : "GPU unavailable"}
+            meter={data.gpu.available ? data.gpu.utilization : undefined}
+          />
+          <Pill label="Network" value={networkLabel} detail={activeInterface?.name ?? "All interfaces"} />
+          <Pill label="Processes" value={String(data.processes.length)} detail="Tracked right now" />
+          <label className="flex min-h-[4.4rem] min-w-0 flex-col justify-center gap-1.5 bg-surface px-3 py-2.5 text-xs text-secondary">
+            <span className="font-mono uppercase tracking-[0.18em]">Interface</span>
           <select
             aria-label="Select the network interface shown in the live strip"
-            className="h-10 rounded-xl bg-background px-3 py-2 font-mono text-sm text-foreground focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
+            className="h-8 rounded-md border border-border bg-background px-2.5 py-1.5 font-mono text-sm text-foreground focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
             value={selectedInterface}
             onChange={(event) => setSelectedInterface(event.target.value)}
           >
@@ -82,7 +85,8 @@ export function LiveStrip() {
               </option>
             ))}
           </select>
-        </label>
+          </label>
+        </div>
       </div>
     </section>
   );
@@ -92,14 +96,61 @@ interface PillProps {
   label: string;
   value: string;
   detail: string;
+  meter?: number;
 }
 
-function Pill({ label, value, detail }: PillProps) {
+function Pill({ label, value, detail, meter }: PillProps) {
   return (
-    <div className="flex min-h-[5.75rem] min-w-0 flex-col justify-center rounded-2xl border border-border bg-surface px-4 py-3">
-      <span className="text-xs font-medium uppercase tracking-[0.18em] text-secondary">{label}</span>
-      <span className="mt-2 truncate text-base font-semibold tracking-tight tabular-nums text-foreground md:text-lg">{value}</span>
-      <span className="mt-1 truncate text-xs text-secondary">{detail}</span>
+    <div className="flex min-h-[4.4rem] min-w-0 flex-col justify-center bg-surface px-3 py-2.5">
+      <span className="text-[0.67rem] font-medium uppercase tracking-[0.18em] text-secondary">{label}</span>
+      <span className="mt-1 overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold tracking-tight tabular-nums text-foreground lg:text-[0.98rem]">{value}</span>
+      <span className="mt-0.5 overflow-hidden text-ellipsis whitespace-nowrap text-xs text-secondary">{detail}</span>
+      {typeof meter === "number" ? (
+        <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-background-muted">
+          <div className={meterBarClassName(meter)} />
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function meterBarClassName(value: number) {
+  const clamped = Math.max(0, Math.min(100, value));
+  if (clamped >= 100) {
+    return "meter-bar w-full";
+  }
+  if (clamped >= 90) {
+    return "meter-bar w-[90%]";
+  }
+  if (clamped >= 80) {
+    return "meter-bar w-4/5";
+  }
+  if (clamped >= 75) {
+    return "meter-bar w-3/4";
+  }
+  if (clamped >= 66) {
+    return "meter-bar w-2/3";
+  }
+  if (clamped >= 60) {
+    return "meter-bar w-3/5";
+  }
+  if (clamped >= 50) {
+    return "meter-bar w-1/2";
+  }
+  if (clamped >= 40) {
+    return "meter-bar w-2/5";
+  }
+  if (clamped >= 33) {
+    return "meter-bar w-1/3";
+  }
+  if (clamped >= 25) {
+    return "meter-bar w-1/4";
+  }
+  if (clamped >= 20) {
+    return "meter-bar w-1/5";
+  }
+  if (clamped >= 10) {
+    return "meter-bar w-[12%]";
+  }
+  return "meter-bar w-[6%]";
 }

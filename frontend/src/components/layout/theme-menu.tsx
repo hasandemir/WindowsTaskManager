@@ -37,7 +37,7 @@ export function ThemeMenu() {
         <DropdownMenu.Content
           sideOffset={10}
           align="end"
-          className="z-[400] min-w-44 rounded-2xl border border-border bg-surface p-2 shadow-lg"
+          className="z-[400] min-w-36 rounded-lg border border-border bg-surface p-1 shadow-lg"
         >
           {themeOptions.map((option) => {
             const Icon = option.icon;
@@ -46,14 +46,14 @@ export function ThemeMenu() {
             return (
               <DropdownMenu.Item
                 key={option.value}
-                className="flex min-h-11 cursor-pointer items-center justify-between rounded-xl px-3 py-2 text-sm text-foreground outline-none transition-colors duration-150 hover:bg-background-muted focus:bg-background-muted"
+                className="flex min-h-8 cursor-pointer items-center justify-between rounded-md px-2.5 py-1.5 text-sm text-foreground outline-none transition-colors duration-150 hover:bg-background-muted focus:bg-background-muted"
                 onSelect={() => setTheme(option.value)}
               >
                 <span className="flex items-center gap-3">
-                  <Icon className="h-4 w-4 text-secondary" />
+                  <Icon className="h-3.5 w-3.5 text-secondary" />
                   {option.label}
                 </span>
-                {selected ? <Check className="h-4 w-4 text-accent" /> : null}
+                {selected ? <Check className="h-3.5 w-3.5 text-accent" /> : null}
               </DropdownMenu.Item>
             );
           })}

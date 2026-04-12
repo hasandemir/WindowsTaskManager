@@ -48,7 +48,6 @@ internal/telegram       Telegram bot, filtering, confirm flow, AI commands
 internal/tray           system tray integration
 internal/winapi         raw Win32 wrappers
 configs/                reference config
-web/                    legacy UI remnants kept only as fallback/reference
 ```
 
 ## Prerequisites
@@ -85,7 +84,7 @@ cd ..
 go build -o wtm.exe ./cmd/wtm
 ```
 
-`build.ps1` currently runs `go mod tidy`, `go fmt`, `go vet`, and then builds the Windows binary. It does not run the frontend build for you.
+`build.ps1` currently runs `go mod tidy`, `go fmt`, `go vet`, `deadcode`, `unparam`, and then builds the Windows binary. It does not run the frontend build for you.
 
 ## Run
 

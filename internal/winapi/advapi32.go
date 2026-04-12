@@ -12,12 +12,9 @@ import (
 const (
 	HKEY_LOCAL_MACHINE = 0x80000002
 	KEY_READ           = 0x20019
-	REG_SZ             = 1
-	REG_DWORD          = 4
-	REG_QWORD          = 11
 )
 
-// RegReadString reads a string registry value (REG_SZ).
+// RegReadString reads a string registry value.
 func RegReadString(rootKey uintptr, subKey, value string) (string, error) {
 	subPtr, err := windows.UTF16PtrFromString(subKey)
 	if err != nil {

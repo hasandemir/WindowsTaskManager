@@ -1,4 +1,5 @@
 import { Button } from "../ui/button";
+import { cn } from "../../lib/cn";
 
 interface FilterChipProps {
   active: boolean;
@@ -8,7 +9,17 @@ interface FilterChipProps {
 
 export function FilterChip({ active, label, onClick }: FilterChipProps) {
   return (
-    <Button type="button" variant={active ? "primary" : "secondary"} size="sm" onClick={onClick}>
+    <Button
+      type="button"
+      variant={active ? "secondary" : "ghost"}
+      size="sm"
+      className={cn(
+        "min-h-8 rounded-md px-2.5 py-1 text-[0.79rem]",
+        active && "border-border-strong bg-surface text-foreground",
+        !active && "text-secondary",
+      )}
+      onClick={onClick}
+    >
       {label}
     </Button>
   );

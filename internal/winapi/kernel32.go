@@ -194,19 +194,6 @@ func SetProcessAffinityMask(h windows.Handle, mask uintptr) error {
 	return nil
 }
 
-// GetProcessAffinityMask retrieves process and system affinity masks.
-func GetProcessAffinityMask(h windows.Handle) (process, system uintptr, err error) {
-	r1, _, e := procGetProcessAffinityMask.Call(
-		uintptr(h),
-		uintptr(unsafe.Pointer(&process)),
-		uintptr(unsafe.Pointer(&system)),
-	)
-	if r1 == 0 {
-		err = fmt.Errorf("GetProcessAffinityMask: %w", e)
-	}
-	return
-}
-
 // CreateJobObject creates an unnamed Job Object.
 func CreateJobObject() (windows.Handle, error) {
 	r1, _, e := procCreateJobObjectW.Call(0, 0)

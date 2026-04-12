@@ -444,7 +444,7 @@ func (b *Bot) cancelAction(args []string, chatID int64) string {
 }
 
 func (b *Bot) queueConfirmation(chatID int64, ttl time.Duration, description, success string, run func() error) string {
-	code, _, err := b.storePendingAction(chatID, ttl, description, success, run)
+	code, err := b.storePendingAction(chatID, ttl, description, success, run)
 	if err != nil {
 		log.Printf("telegram: confirm code generation failed: %v", err)
 		if err := run(); err != nil {
@@ -455,13 +455,13 @@ func (b *Bot) queueConfirmation(chatID int64, ttl time.Duration, description, su
 	return fmt.Sprintf("Pending %s. Confirm with /confirm %s within %s, or /cancel %s.", description, code, formatConfirmTTL(ttl), code)
 }
 
-func (b *Bot) storePendingAction(chatID int64, ttl time.Duration, description, success string, run func() error) (string, time.Time, error) {
+func (b *Bot) storePendingAction(chatID int64, ttl time.Duration, description, success string, run func() error) (string, error) {
 	if ttl <= 0 {
 		ttl = 90 * time.Second
 	}
 	code, err := newConfirmCode()
 	if err != nil {
-		return "", time.Time{}, err
+		return "", err
 	}
 
 	expiresAt := time.Now().Add(ttl)
@@ -475,7 +475,7 @@ func (b *Bot) storePendingAction(chatID int64, ttl time.Duration, description, s
 		Run:         run,
 	}
 	b.mu.Unlock()
-	return code, expiresAt, nil
+	return code, nil
 }
 
 func (b *Bot) cleanupPendingLocked(now time.Time) {
@@ -617,7 +617,7 @@ func (b *Bot) queueAISuggestion(chatID int64, ttl time.Duration, suggestion ai.S
 	if b.executeAI == nil {
 		return description + " (execution unavailable)"
 	}
-	code, _, err := b.storePendingAction(chatID, ttl, description, success, func() error {
+	code, err := b.storePendingAction(chatID, ttl, description, success, func() error {
 		return b.executeAI(suggestion)
 	})
 	if err != nil {

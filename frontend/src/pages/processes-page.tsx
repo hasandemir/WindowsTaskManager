@@ -55,9 +55,11 @@ export function ProcessesPage() {
   }, [debouncedSearch, portCountByPID, processes, sortDirection, sortKey]);
 
   const topProcess = filteredProcesses[0] ?? null;
+  const memoryLeader = [...filteredProcesses].sort((left, right) => right.working_set - left.working_set)[0] ?? null;
   const selectedPID = selectedProcess?.pid ?? null;
   const { data: processConnections = [], isLoading: connectionsLoading } = useProcessConnectionsQuery(selectedPID);
   const portSummary = useMemo(() => summarizePorts(processConnections), [processConnections]);
+
   const updateSort = (nextKey: ProcessSortKey) => {
     if (sortKey === nextKey) {
       setSortDirection((current) => (current === "desc" ? "asc" : "desc"));
@@ -80,9 +82,19 @@ export function ProcessesPage() {
       <div className="space-y-6">
         <PageHeader
           title="Processes"
-          description="Sort, inspect, and control live processes from the Go collector without losing track of what each metric means."
+          description="Sort, inspect, and act on live processes without the surrounding noise."
+          eyebrow="Control room"
+          icon={Boxes}
+          meta={
+            <>
+              <Badge variant="info">{filteredProcesses.length} visible</Badge>
+              <Badge variant={topProcess && topProcess.cpu_percent >= 80 ? "warning" : "success"}>
+                {topProcess ? `${topProcess.name} leads CPU` : "Stable"}
+              </Badge>
+            </>
+          }
           actions={
-            <div className="flex w-full flex-col gap-2 sm:w-auto">
+            <>
               <SearchInput
                 ariaLabel="Search processes by name or PID"
                 placeholder="Search process or PID"
@@ -90,7 +102,7 @@ export function ProcessesPage() {
                 onChange={setSearchValue}
               />
               <div className="flex gap-2 md:hidden">
-                <label className="flex min-h-11 flex-1 items-center gap-2 rounded-2xl border border-border bg-surface px-3 text-sm text-secondary">
+                <label className="flex min-h-9 flex-1 items-center gap-2 rounded-lg border border-border bg-background px-3 text-sm text-secondary">
                   <span>Sort</span>
                   <select
                     aria-label="Sort processes"
@@ -110,43 +122,166 @@ export function ProcessesPage() {
                   {sortDirection === "desc" ? <ArrowDown className="h-4 w-4" /> : <ArrowUp className="h-4 w-4" />}
                 </Button>
               </div>
-              <div className="rounded-2xl border border-dashed border-border bg-background px-3 py-2 text-xs text-secondary">
-                Click <span className="font-semibold text-foreground">PID</span>, <span className="font-semibold text-foreground">Name</span>,{" "}
-                <span className="font-semibold text-foreground">CPU</span>, <span className="font-semibold text-foreground">Memory</span>,{" "}
-                <span className="font-semibold text-foreground">Ports</span>, or <span className="font-semibold text-foreground">Threads</span> to sort.
-              </div>
-            </div>
+            </>
           }
         />
 
-        <div className="grid gap-4 sm:grid-cols-3">
-          <SummaryCard
-            label="Visible processes"
-            value={String(filteredProcesses.length)}
-            accent={<Badge variant="info">Filtered</Badge>}
-          />
+        <div className="grid gap-3 lg:grid-cols-3">
+          <SummaryCard label="Visible processes" value={String(filteredProcesses.length)} accent={<Badge variant="info">Filtered</Badge>} />
           <SummaryCard
             label="Top CPU now"
             value={topProcess ? `${topProcess.name} (${topProcess.cpu_percent.toFixed(1)}%)` : "--"}
-            valueClassName="text-lg font-semibold leading-snug"
+            valueClassName="text-base font-semibold sm:text-lg"
             accent={<Badge variant="warning">CPU</Badge>}
           />
           <SummaryCard
             label="Top memory now"
-            value={topProcess ? formatBytes([...filteredProcesses].sort((a, b) => b.working_set - a.working_set)[0]?.working_set ?? 0) : "--"}
-            valueClassName="text-lg font-semibold"
+            value={memoryLeader ? formatBytes(memoryLeader.working_set) : "--"}
+            valueClassName="text-base font-semibold sm:text-lg"
             accent={<Badge variant="info">Memory</Badge>}
           />
         </div>
+
+        <Card className="space-y-0 overflow-hidden p-0">
+          <div className="border-b border-border px-4 py-3 sm:px-5">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <div className="eyebrow">Process table</div>
+                <h2 className="mt-2 text-lg font-semibold tracking-tight text-foreground">Live process list</h2>
+                <p className="mt-1 text-sm leading-6 text-secondary">
+                  Dense operator view for triage and guarded actions. Select a row only when you need socket and footprint detail.
+                </p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3 lg:w-auto">
+                <div className="soft-panel">
+                  <div className="metric-label">Focus</div>
+                  <div className="mt-1 truncate text-sm font-semibold text-foreground">{topProcess ? topProcess.name : "No process"}</div>
+                  <div className="mt-0.5 text-xs text-secondary">{topProcess ? `${topProcess.cpu_percent.toFixed(1)}% CPU` : "Waiting for data"}</div>
+                </div>
+                <div className="soft-panel">
+                  <div className="metric-label">Selection</div>
+                  <div className="mt-1 truncate text-sm font-semibold text-foreground">{selectedProcess ? selectedProcess.name : "Nothing selected"}</div>
+                  <div className="mt-0.5 text-xs text-secondary">
+                    {selectedProcess ? `PID ${selectedProcess.pid}` : "Choose a row for ports and connections"}
+                  </div>
+                </div>
+                <div className="soft-panel">
+                  <div className="metric-label">Guardrails</div>
+                  <div className="mt-1 text-sm font-semibold text-foreground">Critical + self protected</div>
+                  <div className="mt-0.5 text-xs text-secondary">Unsafe actions stay blocked automatically.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {filteredProcesses.length === 0 ? (
+            <div className="p-4 sm:p-5">
+              <EmptyState icon={Boxes} title="No processes match" description="Try a different name or PID filter." />
+            </div>
+          ) : null}
+
+          <div className="grid gap-4 p-4 md:hidden sm:p-5">
+            {filteredProcesses.map((process) => (
+              <ProcessCard
+                key={process.pid}
+                process={process}
+                isPending={actionMutation.isPending}
+                isSelf={process.pid === selfPID}
+                onDetails={() => setSelectedProcess(process)}
+                onKill={() => setKillCandidate(process)}
+                onResume={() => actionMutation.mutate({ pid: process.pid, action: "resume" })}
+                onSuspend={() => actionMutation.mutate({ pid: process.pid, action: "suspend" })}
+              />
+            ))}
+          </div>
+
+          <div className={filteredProcesses.length === 0 ? "hidden" : "hidden md:block"}>
+            <table className="dense-table min-w-full table-fixed text-left text-sm">
+              <thead className="border-b border-border bg-background/55">
+                <tr>
+                  <th className="w-18 px-4 py-3 pr-3 sm:px-5">
+                    <SortHeader label="PID" isActive={sortKey === "pid"} direction={sortDirection} onClick={() => updateSort("pid")} />
+                  </th>
+                  <th className="min-w-0 py-3 pr-3">
+                    <SortHeader label="Name" isActive={sortKey === "name"} direction={sortDirection} onClick={() => updateSort("name")} />
+                  </th>
+                  <th className="w-18 py-3 pr-3">
+                    <SortHeader label="CPU" isActive={sortKey === "cpu"} direction={sortDirection} onClick={() => updateSort("cpu")} />
+                  </th>
+                  <th className="w-24 py-3 pr-3">
+                    <SortHeader label="Memory" isActive={sortKey === "memory"} direction={sortDirection} onClick={() => updateSort("memory")} />
+                  </th>
+                  <th className="w-16 py-3 pr-3">
+                    <SortHeader label="Ports" isActive={sortKey === "connections"} direction={sortDirection} onClick={() => updateSort("connections")} />
+                  </th>
+                  <th className="w-20 py-3 pr-3">
+                    <SortHeader label="Threads" isActive={sortKey === "threads"} direction={sortDirection} onClick={() => updateSort("threads")} />
+                  </th>
+                  <th className="w-22 py-3 pr-3">State</th>
+                  <th className="w-40 py-3 pr-4 sm:pr-5">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredProcesses.map((process) => {
+                  const isSelf = process.pid === selfPID;
+                  const actionsDisabled = actionMutation.isPending || process.is_critical || isSelf;
+                  const rowState = isSelf ? "WTM" : process.is_critical ? "Critical" : "Ready";
+
+                  return (
+                    <tr
+                      key={process.pid}
+                      className={
+                        selectedProcess?.pid === process.pid
+                          ? "border-b border-border bg-accent-muted/45 transition-colors"
+                          : "border-b border-border transition-colors hover:bg-background/55"
+                      }
+                    >
+                      <td className="px-4 py-2.5 pr-3 font-mono text-secondary whitespace-nowrap sm:px-5">{process.pid}</td>
+                      <td className="py-2.5 pr-3 text-foreground">
+                        <button
+                          type="button"
+                          className="max-w-full truncate text-left font-medium hover:text-accent"
+                          onClick={() => setSelectedProcess(process)}
+                        >
+                          {process.name}
+                        </button>
+                      </td>
+                      <td className="py-2.5 pr-3 tabular-nums text-secondary whitespace-nowrap">{process.cpu_percent.toFixed(1)}%</td>
+                      <td className="py-2.5 pr-3 tabular-nums text-secondary whitespace-nowrap">{formatBytes(process.working_set)}</td>
+                      <td className="py-2.5 pr-3 tabular-nums text-secondary whitespace-nowrap">{process.connections}</td>
+                      <td className="py-2.5 pr-3 tabular-nums text-secondary whitespace-nowrap">{process.thread_count}</td>
+                      <td className="py-2.5 pr-3 text-xs font-semibold text-secondary whitespace-nowrap">{rowState}</td>
+                      <td className="py-2.5 pr-4 sm:pr-5">
+                        <div className="flex flex-wrap items-center justify-end gap-1.5">
+                          <Button size="sm" variant="ghost" onClick={() => setSelectedProcess(process)}>
+                            Details
+                          </Button>
+                          <Button size="sm" variant="secondary" disabled={actionsDisabled} onClick={() => actionMutation.mutate({ pid: process.pid, action: "suspend" })}>
+                            Suspend
+                          </Button>
+                          <Button size="sm" variant="ghost" disabled={actionMutation.isPending || isSelf} onClick={() => actionMutation.mutate({ pid: process.pid, action: "resume" })}>
+                            Resume
+                          </Button>
+                          <Button size="sm" variant="danger" disabled={actionsDisabled} onClick={() => setKillCandidate(process)}>
+                            Kill
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
 
         {selectedProcess ? (
           <Card className="space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h2 className="text-lg font-semibold tracking-tight text-foreground">{selectedProcess.name}</h2>
-                <p className="mt-1 text-sm text-secondary">
-                  PID {selectedProcess.pid} | Connections counts how many active socket bindings are attached to this process right now.
-                </p>
+                <div className="eyebrow">Inspector</div>
+                <h2 className="mt-2 text-lg font-semibold tracking-tight text-foreground">{selectedProcess.name}</h2>
+                <p className="mt-1 text-sm leading-6 text-secondary">PID {selectedProcess.pid}. Footprint and live socket ownership for the selected process.</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Badge variant={selectedProcess.is_critical ? "warning" : "info"}>
@@ -155,18 +290,18 @@ export function ProcessesPage() {
                 {selectedProcess.pid === selfPID ? <Badge variant="error">WTM self process</Badge> : null}
               </div>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
               <DetailTile label="CPU" value={`${selectedProcess.cpu_percent.toFixed(1)}%`} />
               <DetailTile label="Memory" value={formatBytes(selectedProcess.working_set)} />
               <DetailTile label="Threads" value={String(selectedProcess.thread_count)} />
               <DetailTile label="Connections" value={String(selectedProcess.connections)} />
             </div>
-            <div className="grid gap-4 xl:grid-cols-[1.3fr_1fr]">
-              <div className="space-y-3 rounded-2xl border border-border bg-background px-4 py-4">
+            <div className="grid gap-2.5 xl:grid-cols-[minmax(0,1.4fr)_minmax(15rem,0.8fr)]">
+              <div className="soft-panel space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold text-foreground">Port usage</div>
-                    <div className="text-xs text-secondary">Local ports and remote endpoints currently opened by this process.</div>
+                    <div className="text-xs text-secondary">Live local ports and remote peers for this process.</div>
                   </div>
                   <Badge variant="neutral">{connectionsLoading ? "Loading" : `${processConnections.length} rows`}</Badge>
                 </div>
@@ -175,16 +310,16 @@ export function ProcessesPage() {
                 ) : processConnections.length === 0 ? (
                   <div className="text-sm text-secondary">No active port usage was reported for this process in the current snapshot.</div>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="grid gap-2 xl:grid-cols-2">
                     {processConnections.slice(0, 6).map((binding) => (
                       <PortUsageRow key={`${binding.protocol}-${binding.local_port}-${binding.remote_port}-${binding.state}`} binding={binding} />
                     ))}
                   </div>
                 )}
               </div>
-              <div className="space-y-3 rounded-2xl border border-border bg-background px-4 py-4">
+              <div className="soft-panel space-y-3">
                 <div className="text-sm font-semibold text-foreground">Connection summary</div>
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-2 sm:grid-cols-2">
                   <DetailTile label="Listening ports" value={String(portSummary.listeningPorts)} />
                   <DetailTile label="Remote endpoints" value={String(portSummary.remoteEndpoints)} />
                   <DetailTile label="TCP rows" value={String(portSummary.tcpRows)} />
@@ -194,121 +329,6 @@ export function ProcessesPage() {
             </div>
           </Card>
         ) : null}
-
-        {filteredProcesses.length === 0 ? (
-          <EmptyState icon={Boxes} title="No processes match" description="Try a different name or PID filter." />
-        ) : null}
-
-        <div className="grid gap-4 md:hidden">
-          {filteredProcesses.map((process) => (
-            <ProcessCard
-              key={process.pid}
-              process={process}
-              isPending={actionMutation.isPending}
-              isSelf={process.pid === selfPID}
-              onDetails={() => setSelectedProcess(process)}
-              onKill={() => setKillCandidate(process)}
-              onResume={() => actionMutation.mutate({ pid: process.pid, action: "resume" })}
-              onSuspend={() => actionMutation.mutate({ pid: process.pid, action: "suspend" })}
-            />
-          ))}
-        </div>
-
-        <Card className={filteredProcesses.length === 0 ? "hidden" : "hidden overflow-x-auto md:block"}>
-          <table className="min-w-full text-left text-sm">
-            <thead className="text-secondary">
-              <tr>
-                <th className="pb-3 pr-4">
-                  <SortHeader label="PID" isActive={sortKey === "pid"} direction={sortDirection} onClick={() => updateSort("pid")} />
-                </th>
-                <th className="pb-3 pr-4">
-                  <SortHeader label="Name" isActive={sortKey === "name"} direction={sortDirection} onClick={() => updateSort("name")} />
-                </th>
-                <th className="pb-3 pr-4">
-                  <SortHeader label="CPU" isActive={sortKey === "cpu"} direction={sortDirection} onClick={() => updateSort("cpu")} />
-                </th>
-                <th className="pb-3 pr-4">
-                  <SortHeader
-                    label="Memory"
-                    isActive={sortKey === "memory"}
-                    direction={sortDirection}
-                    onClick={() => updateSort("memory")}
-                  />
-                </th>
-                <th className="pb-3 pr-4">
-                  <SortHeader
-                    label="Ports"
-                    isActive={sortKey === "connections"}
-                    direction={sortDirection}
-                    onClick={() => updateSort("connections")}
-                  />
-                </th>
-                <th className="pb-3 pr-4">
-                  <SortHeader
-                    label="Threads"
-                    isActive={sortKey === "threads"}
-                    direction={sortDirection}
-                    onClick={() => updateSort("threads")}
-                  />
-                </th>
-                <th className="pb-3 pr-4">Notes</th>
-                <th className="pb-3">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredProcesses.map((process) => {
-                const isSelf = process.pid === selfPID;
-                const actionsDisabled = actionMutation.isPending || process.is_critical || isSelf;
-                return (
-                  <tr
-                    key={process.pid}
-                    className={selectedProcess?.pid === process.pid ? "border-t border-border bg-background" : "border-t border-border"}
-                  >
-                    <td className="py-3 pr-4 font-mono text-secondary">{process.pid}</td>
-                    <td className="py-3 pr-4 text-foreground">{process.name}</td>
-                    <td className="py-3 pr-4 tabular-nums text-secondary">{process.cpu_percent.toFixed(1)}%</td>
-                    <td className="py-3 pr-4 tabular-nums text-secondary">{formatBytes(process.working_set)}</td>
-                    <td className="py-3 pr-4 tabular-nums text-secondary">{process.connections}</td>
-                    <td className="py-3 pr-4 tabular-nums text-secondary">{process.thread_count}</td>
-                    <td className="py-3 pr-4">
-                      <div className="flex flex-wrap gap-2">
-                        {process.is_critical ? <Badge variant="warning">Critical</Badge> : null}
-                        {isSelf ? <Badge variant="error">WTM</Badge> : null}
-                        {!process.is_critical && !isSelf ? <Badge variant="neutral">Normal</Badge> : null}
-                      </div>
-                    </td>
-                    <td className="py-3">
-                      <div className="flex flex-wrap gap-2">
-                        <Button size="sm" variant="ghost" onClick={() => setSelectedProcess(process)}>
-                          Details
-                        </Button>
-                        <Button size="sm" variant="danger" disabled={actionsDisabled} onClick={() => setKillCandidate(process)}>
-                          Kill
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          disabled={actionsDisabled}
-                          onClick={() => actionMutation.mutate({ pid: process.pid, action: "suspend" })}
-                        >
-                          Suspend
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={actionMutation.isPending || isSelf}
-                          onClick={() => actionMutation.mutate({ pid: process.pid, action: "resume" })}
-                        >
-                          Resume
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </Card>
       </div>
       <ConfirmDialog
         open={killCandidate !== null}
@@ -357,7 +377,7 @@ function ProcessCard({ process, isPending, isSelf, onDetails, onKill, onResume, 
   const actionsDisabled = isPending || process.is_critical || isSelf;
 
   return (
-    <Card className="space-y-4">
+    <Card className="space-y-3">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-lg font-semibold tracking-tight text-foreground">{process.name}</div>
@@ -368,13 +388,13 @@ function ProcessCard({ process, isPending, isSelf, onDetails, onKill, onResume, 
           {isSelf ? <Badge variant="error">WTM</Badge> : null}
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-3 text-sm">
+      <div className="grid grid-cols-2 gap-2.5 text-sm">
         <DetailTile label="CPU" value={`${process.cpu_percent.toFixed(1)}%`} />
         <DetailTile label="Memory" value={formatBytes(process.working_set)} />
         <DetailTile label="Ports" value={String(process.connections)} />
         <DetailTile label="Threads" value={String(process.thread_count)} />
       </div>
-      <div className="rounded-2xl border border-border bg-background px-3 py-3 text-sm text-secondary">
+      <div className="soft-panel text-sm text-secondary">
         Ports shows how many live socket bindings this process owns. Open <span className="font-semibold text-foreground">Details</span> to see actual local ports and remote endpoints.
       </div>
       <div className="flex flex-col gap-2 sm:flex-row">
@@ -393,7 +413,7 @@ function ProcessCard({ process, isPending, isSelf, onDetails, onKill, onResume, 
         </Button>
       </div>
       {isSelf ? (
-        <div className="flex items-center gap-2 rounded-2xl border border-error bg-[color:var(--error-bg)] px-3 py-3 text-sm text-error">
+        <div className="flex items-center gap-2 rounded-lg border border-error bg-[color:var(--error-bg)] px-3 py-2.5 text-sm text-error">
           <ShieldBan className="h-4 w-4 shrink-0" />
           WTM protects its own process from terminate/suspend actions.
         </div>
@@ -408,14 +428,14 @@ interface PortUsageRowProps {
 
 function PortUsageRow({ binding }: PortUsageRowProps) {
   return (
-    <div className="rounded-2xl border border-border bg-surface px-3 py-3">
+    <div className="rounded-md border border-border bg-background px-3 py-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-sm font-semibold text-foreground">
+        <div className="min-w-0 truncate text-sm font-semibold text-foreground">
           {binding.protocol.toUpperCase()} {binding.local_addr}:{binding.local_port}
         </div>
         <Badge variant={binding.state === "LISTEN" ? "success" : "info"}>{binding.state || "OPEN"}</Badge>
       </div>
-      <div className="mt-2 text-xs text-secondary">
+      <div className="mt-1.5 truncate text-xs text-secondary">
         {binding.remote_addr || binding.remote_port > 0 ? `${binding.remote_addr}:${binding.remote_port}` : "No remote peer"}
       </div>
     </div>
@@ -433,7 +453,7 @@ function SortHeader({ label, isActive, direction, onClick }: SortHeaderProps) {
   return (
     <button
       type="button"
-      className="inline-flex items-center gap-1 font-semibold text-secondary transition-colors hover:text-foreground"
+      className="inline-flex items-center gap-1 whitespace-nowrap font-semibold text-secondary transition-colors hover:text-foreground"
       onClick={onClick}
       aria-label={`Sort by ${label}`}
     >

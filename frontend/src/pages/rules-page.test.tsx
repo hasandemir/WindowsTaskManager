@@ -131,6 +131,15 @@ describe("RulesPage", () => {
     expect(window.sessionStorage.getItem("wtm:rule-draft-prefill")).toBeNull();
   });
 
+  it("uses a substring-based match in the thread storm template", async () => {
+    const user = userEvent.setup();
+    render(<RulesPage />);
+
+    await user.click(screen.getByRole("button", { name: /Thread storm/ }));
+
+    expect(screen.getByLabelText("Rule match")).toHaveValue(".exe");
+  });
+
   it("asks for confirmation before deleting a rule", async () => {
     const user = userEvent.setup();
     const mutate = vi.fn();

@@ -2,11 +2,15 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +27,7 @@ type AIAdvisor interface {
 	Enabled() bool
 	Status() map[string]any
 	Analyze(ctx context.Context, prompt string) (*ai.AnalyzeResult, error)
+	Chat(ctx context.Context, message string) (*ai.AnalyzeResult, error)
 	BackgroundState() ai.BackgroundState
 }
 
@@ -37,6 +42,8 @@ type Server struct {
 	emitter    *event.Emitter
 	advisor    AIAdvisor
 	staticFS   fs.FS
+	version    string
+	csrfToken  string
 
 	router *Router
 	hub    *SSEHub
@@ -56,9 +63,14 @@ type Options struct {
 	Emitter    *event.Emitter
 	Advisor    AIAdvisor
 	StaticFS   fs.FS
+	Version    string
 }
 
 func New(opts Options) *Server {
+	version := opts.Version
+	if strings.TrimSpace(version) == "" {
+		version = "dev"
+	}
 	s := &Server{
 		cfg:        opts.Cfg,
 		cfgPath:    opts.CfgPath,
@@ -69,6 +81,8 @@ func New(opts Options) *Server {
 		emitter:    opts.Emitter,
 		advisor:    opts.Advisor,
 		staticFS:   opts.StaticFS,
+		version:    version,
+		csrfToken:  newCSRFSafeToken(),
 		router:     NewRouter(),
 		hub:        NewSSEHub(opts.Emitter),
 	}
@@ -118,6 +132,15 @@ func loggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func securityHeadersMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "same-origin")
+		w.Header().Set("X-Frame-Options", "DENY")
+		next(w, r)
+	}
+}
+
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
@@ -154,4 +177,79 @@ func localOnlyMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+func mutationGuardMiddleware(csrfToken string) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if isSafeMethod(r.Method) {
+				next(w, r)
+				return
+			}
+			if !validOrigin(r) {
+				http.Error(w, "forbidden: invalid origin", http.StatusForbidden)
+				return
+			}
+			if r.Header.Get("X-WTM-CSRF") != csrfToken {
+				http.Error(w, "forbidden: missing csrf token", http.StatusForbidden)
+				return
+			}
+			next(w, r)
+		}
+	}
+}
+
+func isSafeMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	default:
+		return false
+	}
+}
+
+func validOrigin(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" {
+		return false
+	}
+	host := u.Hostname()
+	ip := net.ParseIP(host)
+	if !(strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback())) {
+		return false
+	}
+	return samePort(u.Port(), requestPort(r.Host))
+}
+
+func requestPort(hostport string) string {
+	if host, port, err := net.SplitHostPort(hostport); err == nil {
+		_ = host
+		return port
+	}
+	return ""
+}
+
+func samePort(originPort, requestPort string) bool {
+	if originPort == "" {
+		originPort = "80"
+	}
+	if requestPort == "" {
+		requestPort = "80"
+	}
+	return originPort == requestPort
+}
+
+func newCSRFSafeToken() string {
+	var buf [32]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(buf[:])
 }

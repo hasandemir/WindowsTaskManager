@@ -3,10 +3,12 @@
 package telegram
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ersinkoc/WindowsTaskManager/internal/ai"
 	"github.com/ersinkoc/WindowsTaskManager/internal/anomaly"
 	"github.com/ersinkoc/WindowsTaskManager/internal/config"
 	"github.com/ersinkoc/WindowsTaskManager/internal/metrics"
@@ -17,6 +19,20 @@ type fakeController struct {
 	killed    []uint32
 	suspended []uint32
 	resumed   []uint32
+}
+
+type fakeAdvisor struct {
+	result *ai.AnalyzeResult
+}
+
+func (f *fakeAdvisor) Enabled() bool { return true }
+
+func (f *fakeAdvisor) Analyze(ctx context.Context, userQuestion string) (*ai.AnalyzeResult, error) {
+	return f.result, nil
+}
+
+func (f *fakeAdvisor) Chat(ctx context.Context, userMessage string) (*ai.AnalyzeResult, error) {
+	return f.result, nil
 }
 
 func (f *fakeController) Kill(pid uint32, confirm bool) error {
@@ -65,7 +81,7 @@ func TestPIDActionRequiresConfirm(t *testing.T) {
 		Processes: []metrics.ProcessInfo{{PID: 4242, Name: "node.exe"}},
 	})
 
-	bot := New(cfg, store, anomaly.NewAlertStore(32), ctrl, nil)
+	bot := New(cfg, store, anomaly.NewAlertStore(32), ctrl, nil, nil, nil)
 	reply := bot.pidAction(cfg, 99, []string{"4242"}, func(pid uint32) error {
 		return ctrl.Kill(pid, true)
 	}, "kill", "killed", true)
@@ -104,7 +120,7 @@ func TestCancelAction(t *testing.T) {
 		Processes: []metrics.ProcessInfo{{PID: 9001, Name: "chrome.exe"}},
 	})
 
-	bot := New(cfg, store, anomaly.NewAlertStore(32), ctrl, nil)
+	bot := New(cfg, store, anomaly.NewAlertStore(32), ctrl, nil, nil, nil)
 	reply := bot.pidAction(cfg, 77, []string{"9001"}, func(pid uint32) error {
 		return ctrl.Suspend(pid)
 	}, "suspend", "suspended", true)
@@ -116,6 +132,68 @@ func TestCancelAction(t *testing.T) {
 	}
 	if len(ctrl.suspended) != 0 {
 		t.Fatalf("suspend ran after cancel: %v", ctrl.suspended)
+	}
+}
+
+func TestShouldNotifyTelegramAlertHighValueOnly(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Telegram.Enabled = true
+	cfg.Telegram.BotToken = "secret"
+	cfg.Telegram.NotifyOnCritical = true
+	cfg.Telegram.NotificationMode = "high_value"
+	cfg.Telegram.NotificationTypes = []string{"runaway_cpu", "rule:*"}
+
+	if shouldNotifyTelegramAlert(cfg, anomaly.Alert{Type: "hung_process", Severity: anomaly.SeverityCritical}) {
+		t.Fatal("hung_process should be suppressed in high_value mode")
+	}
+	if !shouldNotifyTelegramAlert(cfg, anomaly.Alert{Type: "runaway_cpu", Severity: anomaly.SeverityCritical}) {
+		t.Fatal("runaway_cpu should pass in high_value mode")
+	}
+	if shouldNotifyTelegramAlert(cfg, anomaly.Alert{Type: "memory_leak", Severity: anomaly.SeverityCritical}) {
+		t.Fatal("memory_leak should be suppressed when removed from allowlist")
+	}
+	if !shouldNotifyTelegramAlert(cfg, anomaly.Alert{Type: "rule:KillChrome", Severity: anomaly.SeverityCritical, Action: "kill"}) {
+		t.Fatal("rule:* should allow critical rule actions")
+	}
+}
+
+func TestAIChatQueuesConfirmableAction(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Telegram.RequireConfirm = true
+	cfg.Telegram.ConfirmTTL = 45 * time.Second
+
+	executed := []string{}
+	bot := New(
+		cfg,
+		storage.NewStore(60, 10),
+		anomaly.NewAlertStore(32),
+		&fakeController{},
+		&fakeAdvisor{
+			result: &ai.AnalyzeResult{
+				Answer: "Protect claude.exe and add a rule.",
+				Actions: []ai.Suggestion{
+					{Type: "protect", Name: "claude.exe"},
+				},
+			},
+		},
+		func(suggestion ai.Suggestion) error {
+			executed = append(executed, suggestion.Type+":"+suggestion.Name)
+			return nil
+		},
+		nil,
+	)
+
+	reply := bot.aiChatText(context.Background(), cfg, 55, "make this safer")
+	if !strings.Contains(reply, "/confirm ") {
+		t.Fatalf("reply=%q missing confirm hint", reply)
+	}
+	code := extractCode(reply)
+	done := bot.confirmAction([]string{code}, 55)
+	if !strings.Contains(done, "AI action executed") {
+		t.Fatalf("confirm reply=%q", done)
+	}
+	if len(executed) != 1 || executed[0] != "protect:claude.exe" {
+		t.Fatalf("executed=%v", executed)
 	}
 }
 

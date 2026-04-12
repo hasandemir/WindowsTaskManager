@@ -44,8 +44,16 @@ type Advisor struct {
 	totalReqs      uint64
 	totalCacheHits uint64
 
+	chatMu      sync.Mutex
+	chatHistory []chatTurn
+
 	bgMu sync.RWMutex
 	bg   backgroundTracker
+}
+
+type chatTurn struct {
+	Role    string
+	Content string
 }
 
 // NewAdvisor builds a new advisor. alertSource is a closure that returns
@@ -124,7 +132,51 @@ func (a *Advisor) Analyze(ctx context.Context, userQuestion string) (*AnalyzeRes
 		alerts = a.alertsRef()
 	}
 	prompt := BuildPrompt(cfg.AI.Language, snap, alerts, cfg.AI.IncludeProcessTree, cfg.AI.IncludePortMap, userQuestion)
+	return a.runPrompt(ctx, cfg, prompt)
+}
 
+// Chat runs a multi-turn AI exchange against the current system snapshot.
+// Conversation history is kept in-memory and trimmed to the last 10 messages.
+func (a *Advisor) Chat(ctx context.Context, userMessage string) (*AnalyzeResult, error) {
+	a.mu.RLock()
+	cfg := a.cfg
+	a.mu.RUnlock()
+	if !cfg.AI.Enabled || cfg.AI.APIKey == "" {
+		return nil, errors.New("AI advisor disabled")
+	}
+	if strings.TrimSpace(userMessage) == "" {
+		return nil, errors.New("chat message required")
+	}
+
+	snap := a.store.Latest()
+	var alerts []anomaly.Alert
+	if a.alertsRef != nil {
+		alerts = a.alertsRef()
+	}
+
+	a.chatMu.Lock()
+	history := append([]chatTurn(nil), a.chatHistory...)
+	a.chatMu.Unlock()
+
+	prompt := BuildChatPrompt(cfg.AI.Language, snap, alerts, cfg.AI.IncludeProcessTree, cfg.AI.IncludePortMap, history, userMessage)
+	resp, err := a.runPrompt(ctx, cfg, prompt)
+	if err != nil {
+		return nil, err
+	}
+
+	a.chatMu.Lock()
+	a.chatHistory = append(a.chatHistory,
+		chatTurn{Role: "user", Content: strings.TrimSpace(userMessage)},
+		chatTurn{Role: "assistant", Content: strings.TrimSpace(resp.Answer)},
+	)
+	if len(a.chatHistory) > 10 {
+		a.chatHistory = append([]chatTurn(nil), a.chatHistory[len(a.chatHistory)-10:]...)
+	}
+	a.chatMu.Unlock()
+	return resp, nil
+}
+
+func (a *Advisor) runPrompt(ctx context.Context, cfg *config.Config, prompt string) (*AnalyzeResult, error) {
 	if cached, ok := a.cache.Get(prompt); ok {
 		a.mu.Lock()
 		a.totalCacheHits++

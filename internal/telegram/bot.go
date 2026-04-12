@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ersinkoc/WindowsTaskManager/internal/ai"
 	"github.com/ersinkoc/WindowsTaskManager/internal/anomaly"
 	"github.com/ersinkoc/WindowsTaskManager/internal/config"
 	"github.com/ersinkoc/WindowsTaskManager/internal/event"
@@ -31,12 +32,20 @@ type processController interface {
 	Resume(pid uint32) error
 }
 
+type aiAdvisor interface {
+	Enabled() bool
+	Analyze(ctx context.Context, userQuestion string) (*ai.AnalyzeResult, error)
+	Chat(ctx context.Context, userMessage string) (*ai.AnalyzeResult, error)
+}
+
 type Bot struct {
 	mu         sync.RWMutex
 	cfg        *config.Config
 	store      *storage.Store
 	alerts     *anomaly.AlertStore
 	controller processController
+	advisor    aiAdvisor
+	executeAI  func(ai.Suggestion) error
 	httpClient *http.Client
 
 	offset    int64
@@ -52,12 +61,14 @@ type pendingAction struct {
 	Run         func() error
 }
 
-func New(cfg *config.Config, store *storage.Store, alerts *anomaly.AlertStore, ctrl processController, emitter *event.Emitter) *Bot {
+func New(cfg *config.Config, store *storage.Store, alerts *anomaly.AlertStore, ctrl processController, advisor aiAdvisor, executeAI func(ai.Suggestion) error, emitter *event.Emitter) *Bot {
 	b := &Bot{
 		cfg:        cfg,
 		store:      store,
 		alerts:     alerts,
 		controller: ctrl,
+		advisor:    advisor,
+		executeAI:  executeAI,
 		httpClient: &http.Client{Timeout: 40 * time.Second},
 		pending:    make(map[string]pendingAction),
 	}
@@ -233,6 +244,10 @@ func (b *Bot) handleMessage(ctx context.Context, cfg *config.Config, msg *tgMess
 		reply = b.topCPUText()
 	case "alerts":
 		reply = b.alertsText()
+	case "ask", "ai":
+		reply = b.aiChatText(ctx, cfg, msg.Chat.ID, strings.Join(args, " "))
+	case "analyze":
+		reply = b.aiAnalyzeText(ctx, cfg, msg.Chat.ID, strings.Join(args, " "))
 	case "kill":
 		reply = b.pidAction(cfg, msg.Chat.ID, args, func(pid uint32) error { return b.controller.Kill(pid, true) }, "kill", "killed", true)
 	case "suspend":
@@ -273,6 +288,8 @@ func helpText() string {
 		"/status - CPU, memory, and top processes",
 		"/topcpu - highest CPU processes",
 		"/alerts - active anomaly alerts",
+		"/ask <question> - chat with the AI advisor",
+		"/analyze <question> - analyze current state and queue AI actions",
 		"/kill <pid> - kill a process",
 		"/suspend <pid> - suspend a process",
 		"/resume <pid> - resume a process",
@@ -427,16 +444,24 @@ func (b *Bot) cancelAction(args []string, chatID int64) string {
 }
 
 func (b *Bot) queueConfirmation(chatID int64, ttl time.Duration, description, success string, run func() error) string {
-	if ttl <= 0 {
-		ttl = 90 * time.Second
-	}
-	code, err := newConfirmCode()
+	code, _, err := b.storePendingAction(chatID, ttl, description, success, run)
 	if err != nil {
 		log.Printf("telegram: confirm code generation failed: %v", err)
 		if err := run(); err != nil {
 			return fmt.Sprintf("Action failed: %v", err)
 		}
 		return success
+	}
+	return fmt.Sprintf("Pending %s. Confirm with /confirm %s within %s, or /cancel %s.", description, code, formatConfirmTTL(ttl), code)
+}
+
+func (b *Bot) storePendingAction(chatID int64, ttl time.Duration, description, success string, run func() error) (string, time.Time, error) {
+	if ttl <= 0 {
+		ttl = 90 * time.Second
+	}
+	code, err := newConfirmCode()
+	if err != nil {
+		return "", time.Time{}, err
 	}
 
 	expiresAt := time.Now().Add(ttl)
@@ -450,8 +475,7 @@ func (b *Bot) queueConfirmation(chatID int64, ttl time.Duration, description, su
 		Run:         run,
 	}
 	b.mu.Unlock()
-
-	return fmt.Sprintf("Pending %s. Confirm with /confirm %s within %s, or /cancel %s.", description, code, formatConfirmTTL(ttl), code)
+	return code, expiresAt, nil
 }
 
 func (b *Bot) cleanupPendingLocked(now time.Time) {
@@ -520,11 +544,11 @@ func (b *Bot) sendMessage(ctx context.Context, cfg *config.Config, chatID int64,
 
 func (b *Bot) handleAlertRaised(data any) {
 	alert, ok := data.(anomaly.Alert)
-	if !ok || alert.Severity != anomaly.SeverityCritical {
+	if !ok {
 		return
 	}
 	cfg := b.currentConfig()
-	if cfg == nil || !cfg.Telegram.Enabled || !cfg.Telegram.NotifyOnCritical || cfg.Telegram.BotToken == "" {
+	if !shouldNotifyTelegramAlert(cfg, alert) {
 		return
 	}
 	text := fmt.Sprintf("[CRITICAL] %s\n%s", alert.Title, alert.Description)
@@ -541,6 +565,145 @@ func (b *Bot) handleAlertRaised(data any) {
 			log.Printf("telegram: notify chat %d: %v", chatID, err)
 		}
 	}
+}
+
+func (b *Bot) aiChatText(ctx context.Context, cfg *config.Config, chatID int64, prompt string) string {
+	return b.aiReply(ctx, cfg, chatID, prompt, true)
+}
+
+func (b *Bot) aiAnalyzeText(ctx context.Context, cfg *config.Config, chatID int64, prompt string) string {
+	return b.aiReply(ctx, cfg, chatID, prompt, false)
+}
+
+func (b *Bot) aiReply(ctx context.Context, cfg *config.Config, chatID int64, prompt string, chatMode bool) string {
+	if strings.TrimSpace(prompt) == "" {
+		if chatMode {
+			return "Prompt required. Example: /ask what should I investigate first?"
+		}
+		return "Prompt required. Example: /analyze summarize the biggest risks right now"
+	}
+	if b.advisor == nil || !b.advisor.Enabled() {
+		return "AI advisor not configured."
+	}
+
+	var (
+		resp *ai.AnalyzeResult
+		err  error
+	)
+	if chatMode {
+		resp, err = b.advisor.Chat(ctx, prompt)
+	} else {
+		resp, err = b.advisor.Analyze(ctx, prompt)
+	}
+	if err != nil {
+		return fmt.Sprintf("AI error: %v", err)
+	}
+
+	lines := []string{strings.TrimSpace(resp.Answer)}
+	if len(resp.Actions) > 0 {
+		lines = append(lines, "", "Queued AI actions:")
+		for _, suggestion := range resp.Actions[:min(len(resp.Actions), 4)] {
+			lines = append(lines, "- "+b.queueAISuggestion(chatID, cfg.Telegram.ConfirmTTL, suggestion))
+		}
+		if len(resp.Actions) > 4 {
+			lines = append(lines, fmt.Sprintf("- %d more action(s) omitted", len(resp.Actions)-4))
+		}
+	}
+	return truncate(strings.Join(lines, "\n"), 4000)
+}
+
+func (b *Bot) queueAISuggestion(chatID int64, ttl time.Duration, suggestion ai.Suggestion) string {
+	description, success := describeAISuggestion(suggestion)
+	if b.executeAI == nil {
+		return description + " (execution unavailable)"
+	}
+	code, _, err := b.storePendingAction(chatID, ttl, description, success, func() error {
+		return b.executeAI(suggestion)
+	})
+	if err != nil {
+		return description + " (failed to queue confirmation)"
+	}
+	return fmt.Sprintf("%s -> /confirm %s", description, code)
+}
+
+func shouldNotifyTelegramAlert(cfg *config.Config, alert anomaly.Alert) bool {
+	if cfg == nil || !cfg.Telegram.Enabled || !cfg.Telegram.NotifyOnCritical || cfg.Telegram.BotToken == "" {
+		return false
+	}
+	if alert.Severity != anomaly.SeverityCritical {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Telegram.NotificationMode)) {
+	case "all_critical":
+		return true
+	case "", "high_value":
+		return isHighValueTelegramAlert(cfg, alert)
+	default:
+		return isHighValueTelegramAlert(cfg, alert)
+	}
+}
+
+func isHighValueTelegramAlert(cfg *config.Config, alert anomaly.Alert) bool {
+	if strings.HasPrefix(alert.Type, "rule:") {
+		return alert.Action == "kill" || alert.Action == "suspend" || matchesTelegramTypeAllowlist(cfg.Telegram.NotificationTypes, "rule:*")
+	}
+	switch alert.Type {
+	case "runaway_cpu", "memory_leak", "port_conflict", "new_process", "network_anomaly", "network_anomaly_system":
+		return matchesTelegramTypeAllowlist(cfg.Telegram.NotificationTypes, alert.Type)
+	default:
+		return false
+	}
+}
+
+func matchesTelegramTypeAllowlist(allowlist []string, alertType string) bool {
+	for _, item := range allowlist {
+		token := strings.ToLower(strings.TrimSpace(item))
+		if token == "" {
+			continue
+		}
+		if token == "*" || token == strings.ToLower(alertType) {
+			return true
+		}
+		if strings.HasSuffix(token, "*") {
+			prefix := strings.TrimSuffix(token, "*")
+			if strings.HasPrefix(strings.ToLower(alertType), prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func describeAISuggestion(suggestion ai.Suggestion) (string, string) {
+	switch strings.ToLower(strings.TrimSpace(suggestion.Type)) {
+	case "kill":
+		target := describeProcess(suggestion.Name, suggestion.PID)
+		return "AI: kill " + target, "AI action executed: killed " + target
+	case "suspend":
+		target := describeProcess(suggestion.Name, suggestion.PID)
+		return "AI: suspend " + target, "AI action executed: suspended " + target
+	case "protect":
+		name := strings.TrimSpace(suggestion.Name)
+		return "AI: protect " + name, "AI action executed: protected " + name
+	case "ignore":
+		name := strings.TrimSpace(suggestion.Name)
+		return "AI: ignore " + name, "AI action executed: ignored " + name
+	case "add_rule":
+		ruleName := ""
+		if suggestion.Rule != nil {
+			ruleName = strings.TrimSpace(suggestion.Rule.Name)
+		}
+		return "AI: add rule " + ruleName, "AI action executed: rule added " + ruleName
+	default:
+		return "AI action", "AI action executed"
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func isAllowedChat(allowed []int64, chatID int64) bool {

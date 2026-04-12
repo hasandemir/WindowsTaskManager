@@ -1,54 +1,107 @@
+//go:build windows
+
 package config
 
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
-// Watcher polls a config file for modifications and invokes a callback when it changes.
-// Polling is portable and avoids extra dependencies.
+const watcherWaitInterval = 500 * time.Millisecond
+
+// Watcher uses native Windows directory change notifications to reload the
+// active config file after atomic save/rename operations.
 type Watcher struct {
 	path     string
 	onChange func(*Config)
-	interval time.Duration
+	debounce time.Duration
 }
 
 func NewWatcher(path string, onChange func(*Config)) *Watcher {
 	return &Watcher{
 		path:     path,
 		onChange: onChange,
-		interval: 2 * time.Second,
+		debounce: 300 * time.Millisecond,
 	}
 }
 
-// Start begins polling. The watcher exits when the context is cancelled.
+// Start begins watching. If native change notification cannot be established,
+// it falls back to conservative stat polling so config reload remains available.
 func (w *Watcher) Start(ctx context.Context) {
-	var lastMod time.Time
-	if info, err := os.Stat(w.path); err == nil {
-		lastMod = info.ModTime()
+	dir := filepath.Dir(w.path)
+	mask := uint32(windows.FILE_NOTIFY_CHANGE_LAST_WRITE | windows.FILE_NOTIFY_CHANGE_FILE_NAME)
+	handle, err := windows.FindFirstChangeNotification(dir, false, mask)
+	if err != nil {
+		w.pollStart(ctx)
+		return
 	}
+	defer windows.FindCloseChangeNotification(handle)
 
-	ticker := time.NewTicker(w.interval)
+	lastMod := w.currentModTime()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		event, err := windows.WaitForSingleObject(handle, uint32(watcherWaitInterval/time.Millisecond))
+		if err != nil {
+			w.pollStart(ctx)
+			return
+		}
+
+		switch event {
+		case uint32(windows.WAIT_OBJECT_0):
+			_ = windows.FindNextChangeNotification(handle)
+			lastMod = w.reloadIfChanged(lastMod)
+		case uint32(windows.WAIT_TIMEOUT):
+			continue
+		default:
+			w.pollStart(ctx)
+			return
+		}
+	}
+}
+
+func (w *Watcher) reloadIfChanged(lastMod time.Time) time.Time {
+	info, err := os.Stat(w.path)
+	if err != nil {
+		return lastMod
+	}
+	if !info.ModTime().After(lastMod) {
+		return lastMod
+	}
+	time.Sleep(w.debounce)
+	cfg, err := Load(w.path)
+	if err == nil && w.onChange != nil {
+		w.onChange(cfg)
+	}
+	return info.ModTime()
+}
+
+func (w *Watcher) currentModTime() time.Time {
+	info, err := os.Stat(w.path)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
+}
+
+func (w *Watcher) pollStart(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
-
+	lastMod := w.currentModTime()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			info, err := os.Stat(w.path)
-			if err != nil {
-				continue
-			}
-			if info.ModTime().After(lastMod) {
-				lastMod = info.ModTime()
-				time.Sleep(300 * time.Millisecond) // settle
-				cfg, err := Load(w.path)
-				if err == nil && w.onChange != nil {
-					w.onChange(cfg)
-				}
-			}
+			lastMod = w.reloadIfChanged(lastMod)
 		}
 	}
 }

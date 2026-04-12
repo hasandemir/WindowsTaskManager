@@ -9,14 +9,16 @@ import (
 )
 
 type telegramConfigDTO struct {
-	Enabled          bool    `json:"enabled"`
-	BotToken         string  `json:"bot_token"`
-	AllowedChatIDs   []int64 `json:"allowed_chat_ids"`
-	APIBaseURL       string  `json:"api_base_url"`
-	PollTimeoutSec   int     `json:"poll_timeout_sec"`
-	NotifyOnCritical bool    `json:"notify_on_critical"`
-	RequireConfirm   bool    `json:"require_confirm"`
-	ConfirmTTLSec    int     `json:"confirm_ttl_sec"`
+	Enabled           bool     `json:"enabled"`
+	BotToken          string   `json:"bot_token"`
+	AllowedChatIDs    []int64  `json:"allowed_chat_ids"`
+	APIBaseURL        string   `json:"api_base_url"`
+	PollTimeoutSec    int      `json:"poll_timeout_sec"`
+	NotifyOnCritical  bool     `json:"notify_on_critical"`
+	NotificationMode  string   `json:"notification_mode"`
+	NotificationTypes []string `json:"notification_types"`
+	RequireConfirm    bool     `json:"require_confirm"`
+	ConfirmTTLSec     int      `json:"confirm_ttl_sec"`
 }
 
 func (s *Server) handleTelegramConfigGet(w http.ResponseWriter, r *http.Request) {
@@ -38,11 +40,10 @@ func (s *Server) handleTelegramConfigUpdate(w http.ResponseWriter, r *http.Reque
 	}
 
 	s.mu.RLock()
-	current := *s.cfg
+	current := cloneConfig(s.cfg)
 	s.mu.RUnlock()
 
 	next := current
-	next.Telegram = current.Telegram
 	next.Telegram.Enabled = body.Enabled
 	if body.BotToken != "" {
 		next.Telegram.BotToken = strings.TrimSpace(body.BotToken)
@@ -51,6 +52,8 @@ func (s *Server) handleTelegramConfigUpdate(w http.ResponseWriter, r *http.Reque
 	next.Telegram.APIBaseURL = strings.TrimSpace(body.APIBaseURL)
 	next.Telegram.PollTimeout = time.Duration(body.PollTimeoutSec) * time.Second
 	next.Telegram.NotifyOnCritical = body.NotifyOnCritical
+	next.Telegram.NotificationMode = strings.TrimSpace(body.NotificationMode)
+	next.Telegram.NotificationTypes = append([]string(nil), body.NotificationTypes...)
 	next.Telegram.RequireConfirm = body.RequireConfirm
 	next.Telegram.ConfirmTTL = time.Duration(body.ConfirmTTLSec) * time.Second
 
@@ -74,13 +77,15 @@ func (s *Server) handleTelegramConfigUpdate(w http.ResponseWriter, r *http.Reque
 
 func telegramDTOFromConfig(tg *config.TelegramConfig) telegramConfigDTO {
 	return telegramConfigDTO{
-		Enabled:          tg.Enabled,
-		BotToken:         maskSecret(tg.BotToken),
-		AllowedChatIDs:   append([]int64(nil), tg.AllowedChatIDs...),
-		APIBaseURL:       tg.APIBaseURL,
-		PollTimeoutSec:   int(tg.PollTimeout / time.Second),
-		NotifyOnCritical: tg.NotifyOnCritical,
-		RequireConfirm:   tg.RequireConfirm,
-		ConfirmTTLSec:    int(tg.ConfirmTTL / time.Second),
+		Enabled:           tg.Enabled,
+		BotToken:          maskSecret(tg.BotToken),
+		AllowedChatIDs:    append([]int64(nil), tg.AllowedChatIDs...),
+		APIBaseURL:        tg.APIBaseURL,
+		PollTimeoutSec:    int(tg.PollTimeout / time.Second),
+		NotifyOnCritical:  tg.NotifyOnCritical,
+		NotificationMode:  tg.NotificationMode,
+		NotificationTypes: append([]string(nil), tg.NotificationTypes...),
+		RequireConfirm:    tg.RequireConfirm,
+		ConfirmTTLSec:     int(tg.ConfirmTTL / time.Second),
 	}
 }

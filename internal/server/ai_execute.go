@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -8,7 +9,14 @@ import (
 
 	"github.com/ersinkoc/WindowsTaskManager/internal/ai"
 	"github.com/ersinkoc/WindowsTaskManager/internal/config"
+	"github.com/ersinkoc/WindowsTaskManager/internal/controller"
 )
+
+type aiExecuteInputError struct {
+	message string
+}
+
+func (e *aiExecuteInputError) Error() string { return e.message }
 
 // aiExecuteRequest is the body of POST /api/v1/ai/execute. The dashboard
 // posts the full Suggestion object from the AI advisor verbatim, so this
@@ -95,65 +103,68 @@ func (s *Server) handleAIExecute(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &body) {
 		return
 	}
+	suggestion := ai.Suggestion{
+		ID:     body.ID,
+		Type:   body.Type,
+		PID:    body.PID,
+		Name:   body.Name,
+		Reason: body.Reason,
+		Rule:   body.Rule,
+		Policy: body.Policy,
+	}
+	if err := s.ExecuteAISuggestion(suggestion); err != nil {
+		var inputErr *aiExecuteInputError
+		switch {
+		case errors.As(err, &inputErr):
+			writeError(w, http.StatusBadRequest, "bad_request", inputErr.Error())
+		case errors.Is(err, controller.ErrProtected),
+			errors.Is(err, controller.ErrCritical),
+			errors.Is(err, controller.ErrSelf),
+			errors.Is(err, controller.ErrConfirmNeeded),
+			errors.Is(err, controller.ErrNotFound):
+			s.controllerError(w, err)
+		default:
+			writeError(w, http.StatusBadRequest, "save_failed", err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "type": suggestion.Type, "pid": suggestion.PID, "name": suggestion.Name})
+}
 
-	switch strings.ToLower(strings.TrimSpace(body.Type)) {
+func (s *Server) ExecuteAISuggestion(suggestion ai.Suggestion) error {
+	switch strings.ToLower(strings.TrimSpace(suggestion.Type)) {
 	case "kill":
-		if body.PID == 0 {
-			writeError(w, http.StatusBadRequest, "bad_request", "pid required")
-			return
+		if suggestion.PID == 0 {
+			return &aiExecuteInputError{message: "pid required"}
 		}
-		if err := s.controller.Kill(body.PID, true); err != nil {
-			s.controllerError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "type": "kill", "pid": body.PID})
-
+		return s.controller.Kill(suggestion.PID, true)
 	case "suspend":
-		if body.PID == 0 {
-			writeError(w, http.StatusBadRequest, "bad_request", "pid required")
-			return
+		if suggestion.PID == 0 {
+			return &aiExecuteInputError{message: "pid required"}
 		}
-		if err := s.controller.Suspend(body.PID); err != nil {
-			s.controllerError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "type": "suspend", "pid": body.PID})
-
+		return s.controller.Suspend(suggestion.PID)
 	case "protect":
-		if strings.TrimSpace(body.Name) == "" {
-			writeError(w, http.StatusBadRequest, "bad_request", "name required")
-			return
+		if strings.TrimSpace(suggestion.Name) == "" {
+			return &aiExecuteInputError{message: "name required"}
 		}
-		if err := s.mutateConfig(func(c *config.Config) error {
-			c.Controller.ProtectedProcesses = appendUniqueFold(c.Controller.ProtectedProcesses, body.Name)
+		return s.mutateConfig(func(c *config.Config) error {
+			c.Controller.ProtectedProcesses = appendUniqueFold(c.Controller.ProtectedProcesses, suggestion.Name)
 			return nil
-		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "save_failed", err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "type": "protect", "name": body.Name})
-
+		})
 	case "ignore":
-		if strings.TrimSpace(body.Name) == "" {
-			writeError(w, http.StatusBadRequest, "bad_request", "name required")
-			return
+		if strings.TrimSpace(suggestion.Name) == "" {
+			return &aiExecuteInputError{message: "name required"}
 		}
-		if err := s.mutateConfig(func(c *config.Config) error {
-			c.Anomaly.IgnoreProcesses = appendUniqueFold(c.Anomaly.IgnoreProcesses, body.Name)
+		return s.mutateConfig(func(c *config.Config) error {
+			c.Anomaly.IgnoreProcesses = appendUniqueFold(c.Anomaly.IgnoreProcesses, suggestion.Name)
 			return nil
-		}); err != nil {
-			writeError(w, http.StatusInternalServerError, "save_failed", err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "type": "ignore", "name": body.Name})
-
+		})
 	case "add_rule":
-		rule, err := aiRuleToConfig(body.Rule)
+		rule, err := aiRuleToConfig(suggestion.Rule)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
-			return
+			return &aiExecuteInputError{message: err.Error()}
 		}
-		if err := s.mutateConfig(func(c *config.Config) error {
+		return s.mutateConfig(func(c *config.Config) error {
 			for _, existing := range c.Rules {
 				if strings.EqualFold(existing.Name, rule.Name) {
 					return fmt.Errorf("rule %q already exists", rule.Name)
@@ -161,14 +172,9 @@ func (s *Server) handleAIExecute(w http.ResponseWriter, r *http.Request) {
 			}
 			c.Rules = append(c.Rules, rule)
 			return nil
-		}); err != nil {
-			writeError(w, http.StatusBadRequest, "save_failed", err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "type": "add_rule", "rule": rule.Name})
-
+		})
 	default:
-		writeError(w, http.StatusBadRequest, "bad_type", "type must be kill|suspend|protect|ignore|add_rule")
+		return &aiExecuteInputError{message: "type must be kill|suspend|protect|ignore|add_rule"}
 	}
 }
 
@@ -238,13 +244,10 @@ func (s *Server) mutateConfig(mutate func(*config.Config) error) error {
 	}
 
 	s.mu.RLock()
-	current := *s.cfg
+	current := cloneConfig(s.cfg)
 	s.mu.RUnlock()
 
 	next := current
-	next.Controller.ProtectedProcesses = append([]string(nil), current.Controller.ProtectedProcesses...)
-	next.Anomaly.IgnoreProcesses = append([]string(nil), current.Anomaly.IgnoreProcesses...)
-	next.Rules = append([]config.Rule(nil), current.Rules...)
 
 	if err := mutate(&next); err != nil {
 		return err

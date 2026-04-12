@@ -21,14 +21,16 @@ func TestTelegramConfigSaveRoundTrip(t *testing.T) {
 	s, _ := newTestServer(t, cfgPath, cfg)
 
 	body := telegramConfigDTO{
-		Enabled:          true,
-		BotToken:         "123456:telegram-secret",
-		AllowedChatIDs:   []int64{111, 222},
-		APIBaseURL:       "https://api.telegram.org",
-		PollTimeoutSec:   30,
-		NotifyOnCritical: true,
-		RequireConfirm:   true,
-		ConfirmTTLSec:    75,
+		Enabled:           true,
+		BotToken:          "123456:telegram-secret",
+		AllowedChatIDs:    []int64{111, 222},
+		APIBaseURL:        "https://api.telegram.org",
+		PollTimeoutSec:    30,
+		NotifyOnCritical:  true,
+		NotificationMode:  "high_value",
+		NotificationTypes: []string{"runaway_cpu", "memory_leak", "rule:*"},
+		RequireConfirm:    true,
+		ConfirmTTLSec:     75,
 	}
 	buf, _ := json.Marshal(body)
 	req := httptest.NewRequest("POST", "/api/v1/telegram/config", bytes.NewReader(buf))
@@ -52,6 +54,9 @@ func TestTelegramConfigSaveRoundTrip(t *testing.T) {
 	if !reloaded.Telegram.RequireConfirm || reloaded.Telegram.ConfirmTTL != 75*time.Second {
 		t.Fatalf("confirm settings not saved: %+v", reloaded.Telegram)
 	}
+	if reloaded.Telegram.NotificationMode != "high_value" || len(reloaded.Telegram.NotificationTypes) != 3 {
+		t.Fatalf("notification settings not saved: %+v", reloaded.Telegram)
+	}
 
 	getReq := httptest.NewRequest("GET", "/api/v1/telegram/config", nil)
 	getRR := httptest.NewRecorder()
@@ -68,5 +73,8 @@ func TestTelegramConfigSaveRoundTrip(t *testing.T) {
 	}
 	if !got.RequireConfirm || got.ConfirmTTLSec != 75 {
 		t.Fatalf("got confirm settings=%+v", got)
+	}
+	if got.NotificationMode != "high_value" || len(got.NotificationTypes) != 3 {
+		t.Fatalf("got notification settings=%+v", got)
 	}
 }

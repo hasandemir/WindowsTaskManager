@@ -1,0 +1,209 @@
+import { useMemo, useState } from "react";
+import { ShieldAlert } from "lucide-react";
+import { SummaryCard } from "../components/shared/detail-tile";
+import { EmptyState } from "../components/shared/empty-state";
+import { FilterChip } from "../components/shared/filter-chip";
+import { PageHeader } from "../components/shared/page-header";
+import { PageSkeleton } from "../components/shared/page-skeleton";
+import { ConfirmDialog } from "../components/shared/confirm-dialog";
+import { SearchInput } from "../components/shared/search-input";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Card } from "../components/ui/card";
+import { useDebouncedValue } from "../hooks/use-debounced-value";
+import { useAlertActionMutation, useAlertsQuery } from "../lib/api-client";
+import type { AlertItem } from "../types/api";
+
+type AlertFilter = "all" | "critical" | "warning" | "info";
+
+export function AlertsPage() {
+  const { data, isLoading } = useAlertsQuery();
+  const alertActionMutation = useAlertActionMutation();
+  const [dismissCandidate, setDismissCandidate] = useState<AlertItem | null>(null);
+  const [searchValue, setSearchValue] = useState("");
+  const [filter, setFilter] = useState<AlertFilter>("all");
+  const debouncedSearch = useDebouncedValue(searchValue, 300);
+  const activeAlerts = data?.active ?? [];
+  const historyAlerts = data?.history ?? [];
+
+  const filteredActive = useMemo(() => filterAlerts(activeAlerts, debouncedSearch, filter), [activeAlerts, debouncedSearch, filter]);
+  const filteredHistory = useMemo(() => filterAlerts(historyAlerts, debouncedSearch, filter).slice(0, 20), [historyAlerts, debouncedSearch, filter]);
+
+  if (isLoading) {
+    return <PageSkeleton />;
+  }
+
+  if (!data || (activeAlerts.length === 0 && historyAlerts.length === 0)) {
+    return <EmptyState icon={ShieldAlert} title="No alerts yet" description="When anomaly detectors fire, active and historical alerts will appear here." />;
+  }
+
+  const criticalCount = activeAlerts.filter((alert) => alert.severity === "critical").length;
+  const warningCount = activeAlerts.filter((alert) => alert.severity === "warning").length;
+
+  return (
+    <>
+      <div className="space-y-6">
+        <PageHeader
+          title="Alerts"
+          description="Current and historical anomaly alerts from the Go engine."
+          actions={
+            <SearchInput
+              ariaLabel="Search alerts by title, type, severity, or PID"
+              placeholder="Search alerts"
+              value={searchValue}
+              widthClassName="sm:w-80"
+              onChange={setSearchValue}
+            />
+          }
+        />
+
+        <div className="grid gap-4 sm:grid-cols-3">
+          <SummaryCard
+            label="Active alerts"
+            value={String(activeAlerts.length)}
+            accent={<Badge variant={activeAlerts.length > 0 ? "warning" : "neutral"}>Active alerts</Badge>}
+          />
+          <SummaryCard
+            label="Critical active"
+            value={String(criticalCount)}
+            accent={<Badge variant={criticalCount > 0 ? "error" : "neutral"}>Critical active</Badge>}
+          />
+          <SummaryCard
+            label="History events"
+            value={String(historyAlerts.length)}
+            accent={<Badge variant={historyAlerts.length > 0 ? "info" : "neutral"}>History events</Badge>}
+          />
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <FilterChip active={filter === "all"} label="All" onClick={() => setFilter("all")} />
+          <FilterChip active={filter === "critical"} label="Critical" onClick={() => setFilter("critical")} />
+          <FilterChip active={filter === "warning"} label="Warning" onClick={() => setFilter("warning")} />
+          <FilterChip active={filter === "info"} label="Info" onClick={() => setFilter("info")} />
+        </div>
+
+        {filteredActive.length === 0 && filteredHistory.length === 0 ? (
+          <EmptyState icon={ShieldAlert} title="No alerts match" description="Try a different title, PID, severity, or type filter." />
+        ) : null}
+
+        <Card className={filteredActive.length === 0 ? "hidden" : "space-y-4"}>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold tracking-tight text-foreground">Active</h2>
+            <Badge variant={warningCount > 0 ? "warning" : "info"}>{filteredActive.length} shown</Badge>
+          </div>
+          <div className="space-y-3">
+            {filteredActive.map((alert) => (
+              <AlertRow
+                key={`${alert.type}-${alert.pid ?? "global"}-${alert.title}`}
+                alert={alert}
+                isPending={alertActionMutation.isPending}
+                onDismiss={() => setDismissCandidate(alert)}
+                onSnooze={() => alertActionMutation.mutate({ type: alert.type, pid: alert.pid, action: "snooze" })}
+              />
+            ))}
+          </div>
+        </Card>
+
+        <Card className={filteredHistory.length === 0 ? "hidden" : "space-y-4"}>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold tracking-tight text-foreground">History</h2>
+            <Badge variant="info">{filteredHistory.length} recent matches</Badge>
+          </div>
+          <div className="space-y-3">
+            {filteredHistory.map((alert) => (
+              <AlertRow key={`${alert.type}-${alert.pid ?? "global"}-${alert.title}`} alert={alert} />
+            ))}
+          </div>
+        </Card>
+      </div>
+      <ConfirmDialog
+        open={dismissCandidate !== null}
+        title={dismissCandidate ? `Dismiss ${dismissCandidate.title}?` : "Dismiss alert?"}
+        description={
+          dismissCandidate
+            ? `This hides the active ${dismissCandidate.severity} alert "${dismissCandidate.title}"${dismissCandidate.pid ? ` for PID ${dismissCandidate.pid}` : ""}.`
+            : "This hides the selected active alert."
+        }
+        confirmLabel="Dismiss alert"
+        tone="neutral"
+        isPending={alertActionMutation.isPending}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDismissCandidate(null);
+          }
+        }}
+        onConfirm={() => {
+          if (!dismissCandidate) {
+            return;
+          }
+          alertActionMutation.mutate(
+            { type: dismissCandidate.type, pid: dismissCandidate.pid, action: "dismiss" },
+            {
+              onSuccess: () => {
+                setDismissCandidate(null);
+              },
+            },
+          );
+        }}
+      />
+    </>
+  );
+}
+
+interface AlertRowProps {
+  alert: AlertItem;
+  isPending?: boolean;
+  onDismiss?: () => void;
+  onSnooze?: () => void;
+}
+
+function AlertRow({ alert, isPending = false, onDismiss, onSnooze }: AlertRowProps) {
+  const variant = alert.severity === "critical" ? "error" : alert.severity === "warning" ? "warning" : "info";
+
+  return (
+    <div className="rounded-2xl border border-border bg-background p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={variant}>{alert.severity}</Badge>
+          <Badge variant="neutral">{alert.type}</Badge>
+          {alert.pid ? <Badge variant="neutral">PID {alert.pid}</Badge> : null}
+          <div className="text-sm font-semibold text-foreground">{alert.title}</div>
+        </div>
+        {onDismiss || onSnooze ? (
+          <div className="flex flex-wrap gap-2">
+            {onSnooze ? (
+              <Button type="button" size="sm" variant="secondary" disabled={isPending} onClick={onSnooze}>
+                Snooze 30m
+              </Button>
+            ) : null}
+            {onDismiss ? (
+              <Button type="button" size="sm" variant="ghost" disabled={isPending} onClick={onDismiss}>
+                Dismiss
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+      <p className="mt-2 text-sm text-secondary">{alert.description}</p>
+    </div>
+  );
+}
+
+function filterAlerts(alerts: AlertItem[], query: string, filter: AlertFilter) {
+  const needle = query.trim().toLowerCase();
+  return alerts.filter((alert) => {
+    if (filter !== "all" && alert.severity !== filter) {
+      return false;
+    }
+    if (!needle) {
+      return true;
+    }
+    return (
+      alert.title.toLowerCase().includes(needle) ||
+      alert.description.toLowerCase().includes(needle) ||
+      alert.type.toLowerCase().includes(needle) ||
+      alert.severity.toLowerCase().includes(needle) ||
+      String(alert.pid ?? "").includes(needle)
+    );
+  });
+}

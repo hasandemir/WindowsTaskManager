@@ -3,16 +3,25 @@
 package collector
 
 import (
+	"math"
 	"strings"
 
 	"github.com/ersinkoc/WindowsTaskManager/internal/metrics"
 	"github.com/ersinkoc/WindowsTaskManager/internal/winapi"
 )
 
-// DiskCollector returns the list of fixed drives plus their capacity.
-// IO/sec counters are left at zero — implementing the Win32 disk
-// performance API requires elevation and is left for a future iteration.
-type DiskCollector struct{}
+type diskPerfCounters struct {
+	query     winapi.PdhQuery
+	readBPS   winapi.PdhCounter
+	writeBPS  winapi.PdhCounter
+	readIOPS  winapi.PdhCounter
+	writeIOPS winapi.PdhCounter
+}
+
+// DiskCollector returns the list of visible drives plus live LogicalDisk I/O counters.
+type DiskCollector struct {
+	perf *diskPerfCounters
+}
 
 func NewDiskCollector() *DiskCollector { return &DiskCollector{} }
 
@@ -21,6 +30,8 @@ func (d *DiskCollector) Collect() metrics.DiskMetrics {
 	if err != nil {
 		return metrics.DiskMetrics{}
 	}
+
+	readBPS, writeBPS, readIOPS, writeIOPS := d.samplePerfCounters()
 	out := metrics.DiskMetrics{Drives: make([]metrics.DriveInfo, 0, len(roots))}
 	for _, root := range roots {
 		t := winapi.GetDriveType(root)
@@ -33,7 +44,8 @@ func (d *DiskCollector) Collect() metrics.DiskMetrics {
 		}
 		used := total - free
 		label, fs := winapi.GetVolumeInformation(root)
-		di := metrics.DriveInfo{
+		instance := strings.ToLower(strings.TrimRight(root, "\\"))
+		out.Drives = append(out.Drives, metrics.DriveInfo{
 			Letter:     strings.TrimRight(root, "\\"),
 			Label:      label,
 			FSType:     fs,
@@ -41,8 +53,82 @@ func (d *DiskCollector) Collect() metrics.DiskMetrics {
 			FreeBytes:  free,
 			UsedBytes:  used,
 			UsedPct:    float64(used) / float64(total) * 100.0,
-		}
-		out.Drives = append(out.Drives, di)
+			ReadBPS:    counterUint64(readBPS[instance]),
+			WriteBPS:   counterUint64(writeBPS[instance]),
+			ReadIOPS:   counterUint64(readIOPS[instance]),
+			WriteIOPS:  counterUint64(writeIOPS[instance]),
+		})
 	}
 	return out
+}
+
+func (d *DiskCollector) samplePerfCounters() (map[string]float64, map[string]float64, map[string]float64, map[string]float64) {
+	if d.perf == nil {
+		perf, err := newDiskPerfCounters()
+		if err == nil {
+			d.perf = perf
+		}
+	}
+	if d.perf == nil {
+		return map[string]float64{}, map[string]float64{}, map[string]float64{}, map[string]float64{}
+	}
+	if err := winapi.CollectQueryData(d.perf.query); err != nil {
+		return map[string]float64{}, map[string]float64{}, map[string]float64{}, map[string]float64{}
+	}
+	readBPS, err1 := winapi.GetFormattedCounterArrayDouble(d.perf.readBPS)
+	writeBPS, err2 := winapi.GetFormattedCounterArrayDouble(d.perf.writeBPS)
+	readIOPS, err3 := winapi.GetFormattedCounterArrayDouble(d.perf.readIOPS)
+	writeIOPS, err4 := winapi.GetFormattedCounterArrayDouble(d.perf.writeIOPS)
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
+		return map[string]float64{}, map[string]float64{}, map[string]float64{}, map[string]float64{}
+	}
+	return normalizeCounterMap(readBPS), normalizeCounterMap(writeBPS), normalizeCounterMap(readIOPS), normalizeCounterMap(writeIOPS)
+}
+
+func newDiskPerfCounters() (*diskPerfCounters, error) {
+	query, err := winapi.OpenPdhQuery()
+	if err != nil {
+		return nil, err
+	}
+	perf := &diskPerfCounters{query: query}
+	if perf.readBPS, err = winapi.AddEnglishCounter(query, `\LogicalDisk(*)\Disk Read Bytes/sec`); err != nil {
+		query.Close()
+		return nil, err
+	}
+	if perf.writeBPS, err = winapi.AddEnglishCounter(query, `\LogicalDisk(*)\Disk Write Bytes/sec`); err != nil {
+		query.Close()
+		return nil, err
+	}
+	if perf.readIOPS, err = winapi.AddEnglishCounter(query, `\LogicalDisk(*)\Disk Reads/sec`); err != nil {
+		query.Close()
+		return nil, err
+	}
+	if perf.writeIOPS, err = winapi.AddEnglishCounter(query, `\LogicalDisk(*)\Disk Writes/sec`); err != nil {
+		query.Close()
+		return nil, err
+	}
+	if err := winapi.CollectQueryData(query); err != nil {
+		query.Close()
+		return nil, err
+	}
+	return perf, nil
+}
+
+func normalizeCounterMap(values map[string]float64) map[string]float64 {
+	normalized := make(map[string]float64, len(values))
+	for name, value := range values {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key == "" || key == "_total" {
+			continue
+		}
+		normalized[key] = value
+	}
+	return normalized
+}
+
+func counterUint64(value float64) uint64 {
+	if value <= 0 {
+		return 0
+	}
+	return uint64(math.Round(value))
 }

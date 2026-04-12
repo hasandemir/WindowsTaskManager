@@ -39,10 +39,10 @@ func (e *Emitter) Emit(eventType string, data any) {
 	e.mu.RUnlock()
 
 	for _, fn := range subs {
-		safeCall(fn, eventType, data)
+		go safeCall(fn, eventType, data)
 	}
 	for _, fn := range typed {
-		safeCallTyped(fn, data)
+		go safeCallTyped(fn, data)
 	}
 }
 

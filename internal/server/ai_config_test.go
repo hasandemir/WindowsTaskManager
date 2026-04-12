@@ -23,6 +23,7 @@ func newTestServer(t *testing.T, cfgPath string, cfg *config.Config) (*Server, *
 		Cfg:     cfg,
 		CfgPath: cfgPath,
 		Emitter: event.NewEmitter(),
+		Version: "test-version",
 		OnCfgApply: func(c *config.Config) {
 			applied = append(applied, c)
 		},

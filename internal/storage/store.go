@@ -54,7 +54,29 @@ func NewStore(historyCap, procHistoryCap int) *Store {
 // row into the system history ring.
 func (s *Store) SetLatest(snap *metrics.SystemSnapshot) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.setLatestLocked(snap)
+	s.recordSnapshotLocked(snap)
+}
+
+// UpdateLatest mutates the latest snapshot in place without appending a new
+// history row. Use this for enriching a previously sampled snapshot with
+// derived data such as process trees or port bindings.
+func (s *Store) UpdateLatest(update func(*metrics.SystemSnapshot)) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.latest == nil {
+		return false
+	}
+	update(s.latest)
+	return true
+}
+
+func (s *Store) setLatestLocked(snap *metrics.SystemSnapshot) {
 	s.latest = snap
+}
+
+func (s *Store) recordSnapshotLocked(snap *metrics.SystemSnapshot) {
 	s.systemHistory.Add(metrics.TimestampedSystem{
 		Time:    snap.Timestamp,
 		CPU:     snap.CPU,
@@ -83,7 +105,6 @@ func (s *Store) SetLatest(snap *metrics.SystemSnapshot) {
 		})
 		s.procSeen[p.PID] = now
 	}
-	s.mu.Unlock()
 }
 
 // Latest returns the most recent snapshot or nil if none has been recorded.

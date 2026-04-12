@@ -141,8 +141,9 @@ func (m *Manager) treeLoop(ctx context.Context) {
 				continue
 			}
 			tree := BuildProcessTree(snap.Processes)
-			snap.ProcessTree = tree
-			m.store.SetLatest(snap)
+			m.store.UpdateLatest(func(latest *metrics.SystemSnapshot) {
+				latest.ProcessTree = tree
+			})
 			if m.emitter != nil {
 				m.emitter.Emit(EventProcessTree, tree)
 			}
@@ -166,8 +167,9 @@ func (m *Manager) portsLoop(ctx context.Context) {
 				timer.Reset(m.portsInterval())
 				continue
 			}
-			snap.PortBindings = bindings
-			m.store.SetLatest(snap)
+			m.store.UpdateLatest(func(latest *metrics.SystemSnapshot) {
+				latest.PortBindings = bindings
+			})
 			if m.emitter != nil {
 				m.emitter.Emit(EventPortBindings, bindings)
 			}

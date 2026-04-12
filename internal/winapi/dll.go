@@ -9,6 +9,7 @@ var (
 	ntdll    = windows.NewLazySystemDLL("ntdll.dll")
 	psapi    = windows.NewLazySystemDLL("psapi.dll")
 	iphlpapi = windows.NewLazySystemDLL("iphlpapi.dll")
+	pdh      = windows.NewLazySystemDLL("pdh.dll")
 	user32   = windows.NewLazySystemDLL("user32.dll")
 	shell32  = windows.NewLazySystemDLL("shell32.dll")
 	advapi32 = windows.NewLazySystemDLL("advapi32.dll")
@@ -62,6 +63,15 @@ var (
 	procGetExtendedUdpTable = iphlpapi.NewProc("GetExtendedUdpTable")
 	procGetIfTable2         = iphlpapi.NewProc("GetIfTable2")
 	procFreeMibTable        = iphlpapi.NewProc("FreeMibTable")
+)
+
+// pdh procs
+var (
+	procPdhOpenQueryW                = pdh.NewProc("PdhOpenQueryW")
+	procPdhCloseQuery                = pdh.NewProc("PdhCloseQuery")
+	procPdhAddEnglishCounterW        = pdh.NewProc("PdhAddEnglishCounterW")
+	procPdhCollectQueryData          = pdh.NewProc("PdhCollectQueryData")
+	procPdhGetFormattedCounterArrayW = pdh.NewProc("PdhGetFormattedCounterArrayW")
 )
 
 // user32 procs

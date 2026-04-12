@@ -3,6 +3,19 @@
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+const csrfToken = document.querySelector('meta[name="wtm-csrf-token"]')?.content || "";
+
+function wtmFetch(url, opts = {}) {
+  const next = { ...opts };
+  const method = (next.method || "GET").toUpperCase();
+  const headers = new Headers(next.headers || {});
+  if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+    headers.set("X-WTM-CSRF", csrfToken);
+  }
+  next.headers = headers;
+  next.credentials = "same-origin";
+  return fetch(url, next);
+}
 
 const state = {
   snapshot: null,
@@ -24,6 +37,9 @@ const state = {
   // on boot. Lowercased for fast EqualFold-style checks on the process table.
   protectedNames: new Set(),
   ignoredNames: new Set(),
+  aiChat: [],
+  networkPreference: localStorage.getItem("wtm.netSource") || "auto",
+  networkOptionSig: "",
 };
 
 function fmtBytes(n) {
@@ -73,11 +89,21 @@ function setupTabs() {
       const tab = btn.dataset.tab;
       $(`#tab-${tab}`).classList.add("active");
       state.activeTab = tab;
+      syncLiveStripVisibility();
+      if (tab === "ai" && aiModels.length === 0) {
+        loadAIModels();
+      }
       // Render the freshly-visible tab immediately so the user doesn't see a
       // stale snapshot while waiting for the next render tick.
       if (state.snapshot) renderAll(state.snapshot);
     });
   });
+}
+
+function syncLiveStripVisibility() {
+  const strip = $("#tab-live-strip");
+  if (!strip) return;
+  strip.hidden = state.activeTab === "overview" || state.activeTab === "about";
 }
 
 function setConn(online) {
@@ -100,11 +126,15 @@ function renderOverview(snap) {
   $("#mem-pct").textContent = snap.memory.used_percent.toFixed(1);
   $("#mem-used").textContent = fmtBytes(snap.memory.used_phys);
   $("#mem-total").textContent = fmtBytes(snap.memory.total_phys);
-  $("#gpu-pct").textContent = snap.gpu && snap.gpu.utilization ? snap.gpu.utilization.toFixed(0) : "—";
-  $("#gpu-name").textContent = snap.gpu ? snap.gpu.name : "—";
-  $("#net-down").textContent = fmtRate(snap.network.total_down_bps || 0);
-  $("#net-up").textContent = fmtRate(snap.network.total_up_bps || 0);
+  const gpu = describeGPU(snap.gpu);
+  const net = describeNetwork(snap.network);
+  $("#gpu-pct").textContent = gpu.percent;
+  $("#gpu-name").textContent = gpu.label;
+  $("#net-down").textContent = fmtRate(net.downBPS);
+  $("#net-up").textContent = fmtRate(net.upBPS);
+  $("#net-active").textContent = net.label;
   $("#net-iface").textContent = (snap.network.interfaces || []).length;
+  renderLiveStrip(snap);
 
   state.history.cpu.push(snap.cpu.total_percent);
   state.history.mem.push(snap.memory.used_percent);
@@ -125,6 +155,94 @@ function renderOverview(snap) {
       el("div", { class: "bar" }, fill),
     ));
   });
+}
+
+function renderLiveStrip(snap) {
+  const gpu = describeGPU(snap.gpu);
+  const net = describeNetwork(snap.network);
+  $("#live-cpu").textContent = `${snap.cpu.total_percent.toFixed(1)}%`;
+  $("#live-mem").textContent = `${snap.memory.used_percent.toFixed(1)}% (${fmtBytes(snap.memory.used_phys)})`;
+  $("#live-gpu").textContent = gpu.compact;
+  $("#live-net").textContent = `${fmtRate(net.downBPS)} ↓ / ${fmtRate(net.upBPS)} ↑`;
+  $("#live-proc").textContent = String((snap.processes || []).length);
+}
+
+function describeGPU(gpu) {
+  if (!gpu) {
+    return { percent: "n/a", compact: "n/a", label: "GPU unavailable" };
+  }
+  const hasUtil = Number.isFinite(gpu.utilization);
+  if (gpu.available) {
+    const percent = hasUtil ? `${gpu.utilization.toFixed(0)}%` : "0%";
+    return {
+      percent,
+      compact: percent,
+      label: gpu.name || "GPU",
+    };
+  }
+  return {
+    percent: "n/a",
+    compact: "n/a",
+    label: gpu.name ? `${gpu.name} (perf counters unavailable)` : "GPU unavailable",
+  };
+}
+
+function describeNetwork(network) {
+  syncNetworkSelector(network);
+  const interfaces = (network && network.interfaces) || [];
+  if (state.networkPreference && state.networkPreference !== "auto") {
+    const selected = interfaces.find((iface) => iface.name === state.networkPreference);
+    if (selected) {
+      return {
+        label: selected.name,
+        downBPS: selected.in_bps || 0,
+        upBPS: selected.out_bps || 0,
+      };
+    }
+  }
+  let best = null;
+  let bestScore = -1;
+  for (const iface of interfaces) {
+    const score = (iface.in_bps || 0) + (iface.out_bps || 0) + (iface.in_pps || 0) + (iface.out_pps || 0);
+    if (score > bestScore) {
+      best = iface;
+      bestScore = score;
+    }
+  }
+  if (best) {
+    return {
+      label: `${best.name} (auto)`,
+      downBPS: best.in_bps || 0,
+      upBPS: best.out_bps || 0,
+    };
+  }
+  return {
+    label: "Auto",
+    downBPS: (network && network.total_down_bps) || 0,
+    upBPS: (network && network.total_up_bps) || 0,
+  };
+}
+
+function syncNetworkSelector(network) {
+  const sel = $("#net-source");
+  if (!sel) return;
+  const names = Array.from(new Set(((network && network.interfaces) || []).map((iface) => iface.name).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const sig = ["auto", ...names].join("\n");
+  if (state.networkOptionSig !== sig) {
+    state.networkOptionSig = sig;
+    clear(sel);
+    sel.appendChild(el("option", { value: "auto" }, "Auto"));
+    for (const name of names) {
+      sel.appendChild(el("option", { value: name }, name));
+    }
+  }
+  if (state.networkPreference !== "auto" && !names.includes(state.networkPreference)) {
+    state.networkPreference = "auto";
+    localStorage.setItem("wtm.netSource", state.networkPreference);
+  }
+  if (sel.value !== state.networkPreference) {
+    sel.value = state.networkPreference;
+  }
 }
 
 function drawSpark(canvas, data, color) {
@@ -252,7 +370,7 @@ function updateSortIndicators() {
 
 async function loadConfig() {
   try {
-    const c = await fetch("/api/v1/config").then((r) => r.json());
+    const c = await wtmFetch("/api/v1/config").then((r) => r.json());
     const prot = (c && c.Controller && c.Controller.ProtectedProcesses) || [];
     const ign = (c && c.Anomaly && c.Anomaly.IgnoreProcesses) || [];
     state.protectedNames = new Set(prot.map((x) => String(x).toLowerCase()));
@@ -263,7 +381,7 @@ async function loadConfig() {
 
 async function toggleProtect(name, on) {
   try {
-    const r = await fetch("/api/v1/config/protect", {
+    const r = await wtmFetch("/api/v1/config/protect", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, protect: on }),
     });
@@ -278,7 +396,7 @@ async function toggleProtect(name, on) {
 
 async function toggleIgnore(name, on) {
   try {
-    const r = await fetch("/api/v1/config/ignore", {
+    const r = await wtmFetch("/api/v1/config/ignore", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, ignore: on }),
     });
@@ -347,7 +465,7 @@ function renderDisks(snap) {
 
 async function clearAllAlerts() {
   try {
-    const r = await fetch("/api/v1/alerts/clear", { method: "POST" });
+    const r = await wtmFetch("/api/v1/alerts/clear", { method: "POST" });
     if (!r.ok) {
       const b = await r.json().catch(() => ({}));
       alert((b.error && b.error.message) || r.statusText);
@@ -360,12 +478,36 @@ async function clearAllAlerts() {
 async function loadAlerts() {
   try {
     const [active, history] = await Promise.all([
-      fetch("/api/v1/alerts").then((r) => r.json()),
-      fetch("/api/v1/alerts/history").then((r) => r.json()),
+      wtmFetch("/api/v1/alerts").then((r) => r.json()),
+      wtmFetch("/api/v1/alerts/history").then((r) => r.json()),
     ]);
     renderAlertList($("#alerts-active"), active);
     renderAlertList($("#alerts-history"), (history || []).slice().reverse().slice(0, 50));
   } catch (e) { /* ignore */ }
+}
+async function dismissAlert(a) {
+  const pid = a.pid ? `/${a.pid}` : "";
+  const url = `/api/v1/alerts/${encodeURIComponent(a.type)}${pid}/dismiss`;
+  try {
+    const r = await wtmFetch(url, { method: "POST" });
+    if (!r.ok) {
+      const b = await r.json().catch(() => ({}));
+      throw new Error((b.error && b.error.message) || r.statusText);
+    }
+    loadAlerts();
+  } catch (e) { alert(e.message); }
+}
+async function snoozeAlert(a) {
+  const pid = a.pid ? `/${a.pid}` : "";
+  const url = `/api/v1/alerts/${encodeURIComponent(a.type)}${pid}/snooze?duration=30m`;
+  try {
+    const r = await wtmFetch(url, { method: "POST" });
+    if (!r.ok) {
+      const b = await r.json().catch(() => ({}));
+      throw new Error((b.error && b.error.message) || r.statusText);
+    }
+    loadAlerts();
+  } catch (e) { alert(e.message); }
 }
 function renderAlertList(ul, items) {
   clear(ul);
@@ -373,11 +515,19 @@ function renderAlertList(ul, items) {
     ul.appendChild(el("li", { class: "muted" }, "— none —"));
     return;
   }
+  const interactive = ul.id === "alerts-active";
   for (const a of items) {
-    ul.appendChild(el("li", { class: a.severity || "" },
+    const row = el("li", { class: a.severity || "" },
       el("div", { class: "alert-title" }, `[${a.severity}] ${a.title}`),
       el("div", { class: "alert-desc" }, a.description || ""),
-    ));
+    );
+    if (interactive) {
+      row.appendChild(el("div", { class: "alert-actions" },
+        el("button", { type: "button", onclick: () => dismissAlert(a) }, "Dismiss"),
+        el("button", { type: "button", onclick: () => snoozeAlert(a) }, "Snooze 30m"),
+      ));
+    }
+    ul.appendChild(row);
   }
 }
 
@@ -396,7 +546,7 @@ const actionOptions = ["alert", "kill", "suspend"];
 
 async function loadRules() {
   try {
-    const r = await fetch("/api/v1/rules").then((r) => r.json());
+    const r = await wtmFetch("/api/v1/rules").then((r) => r.json());
     rulesModel = (r.rules || []).map(normalizeRule);
     renderRules();
   } catch (e) { /* ignore */ }
@@ -506,7 +656,7 @@ async function saveRules() {
   msg.textContent = "saving…";
   msg.style.color = "";
   try {
-    const r = await fetch("/api/v1/rules", {
+    const r = await wtmFetch("/api/v1/rules", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ rules: rulesModel }),
     });
@@ -543,7 +693,7 @@ function chatIDsToText(ids) {
 
 async function loadAIStatus() {
   try {
-    const s = await fetch("/api/v1/ai/status").then((r) => r.json());
+    const s = await wtmFetch("/api/v1/ai/status").then((r) => r.json());
     const provider = s.provider || "—";
     const model = s.model || "—";
     updateAIPill(s);
@@ -562,7 +712,7 @@ async function loadAIStatus() {
 
 async function loadAIWatch() {
   try {
-    const s = await fetch("/api/v1/ai/watch").then((r) => r.json());
+    const s = await wtmFetch("/api/v1/ai/watch").then((r) => r.json());
     renderAIWatch(s || {});
   } catch (e) {
     $("#ai-watch-summary").textContent = "Background watch unavailable";
@@ -659,7 +809,7 @@ function updateAIPill(s) {
 
 async function loadInfo() {
   try {
-    const info = await fetch("/api/v1/info").then((r) => r.json());
+    const info = await wtmFetch("/api/v1/info").then((r) => r.json());
     state.selfPID = Number.isInteger(info.self_pid) ? info.self_pid : null;
     if (state.snapshot && state.activeTab === "processes") renderProcesses(state.snapshot);
   } catch (e) { /* ignore */ }
@@ -667,7 +817,7 @@ async function loadInfo() {
 
 async function loadAIPresets() {
   try {
-    aiPresets = await fetch("/api/v1/ai/presets").then((r) => r.json());
+    aiPresets = await wtmFetch("/api/v1/ai/presets").then((r) => r.json());
     const sel = $("#ai-preset");
     clear(sel);
     sel.appendChild(el("option", { value: "" }, "— pick a starter —"));
@@ -679,7 +829,7 @@ async function loadAIPresets() {
 
 async function loadAIConfig() {
   try {
-    const c = await fetch("/api/v1/ai/config").then((r) => r.json());
+    const c = await wtmFetch("/api/v1/ai/config").then((r) => r.json());
     $("#ai-enabled").checked = !!c.enabled;
     $("#ai-provider").value = c.provider || "anthropic";
     $("#ai-endpoint").value = c.endpoint || "";
@@ -706,7 +856,7 @@ async function loadAIConfig() {
 
 async function loadAIModels() {
   try {
-    const r = await fetch("/api/v1/ai/models").then((r) => r.json());
+    const r = await wtmFetch("/api/v1/ai/models").then((r) => r.json());
     aiModels = Array.isArray(r.models) ? r.models : [];
     if (aiModels.length === 0 && !r.error) {
       // Cold start — models.dev fetch is in flight. Retry shortly.
@@ -719,7 +869,7 @@ async function loadAIModels() {
 
 async function loadTelegramConfig() {
   try {
-    const c = await fetch("/api/v1/telegram/config").then((r) => r.json());
+    const c = await wtmFetch("/api/v1/telegram/config").then((r) => r.json());
     $("#tg-enabled").checked = !!c.enabled;
     $("#tg-api-base").value = c.api_base_url || "https://api.telegram.org";
     $("#tg-chat-ids").value = chatIDsToText(c.allowed_chat_ids || []);
@@ -756,7 +906,7 @@ async function saveTelegramConfig() {
   msg.textContent = "saving…";
   msg.style.color = "";
   try {
-    const r = await fetch("/api/v1/telegram/config", {
+    const r = await wtmFetch("/api/v1/telegram/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -877,7 +1027,7 @@ async function saveAIConfig() {
     include_port_map: true,
   };
   try {
-    const r = await fetch("/api/v1/ai/config", {
+    const r = await wtmFetch("/api/v1/ai/config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -907,7 +1057,7 @@ async function sendAI() {
   $("#ai-answer").textContent = "thinking…";
   clear($("#ai-actions"));
   try {
-    const r = await fetch("/api/v1/ai/analyze", {
+    const r = await wtmFetch("/api/v1/ai/analyze", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt: promptText }),
     });
@@ -918,6 +1068,54 @@ async function sendAI() {
     loadAIStatus();
   } catch (e) {
     $("#ai-answer").textContent = `error: ${e.message}`;
+  }
+}
+
+function renderAIChatLog() {
+  const wrap = $("#ai-chat-log");
+  if (!wrap) return;
+  clear(wrap);
+  if (!state.aiChat || state.aiChat.length === 0) {
+    wrap.appendChild(el("div", { class: "ai-chat-empty muted" }, "No chat yet. Ask about CPU spikes, noisy processes, or what action is safest."));
+    return;
+  }
+  for (const msg of state.aiChat) {
+    wrap.appendChild(
+      el("div", { class: `ai-chat-msg ${msg.role}` },
+        el("span", { class: "ai-chat-role" }, msg.role === "user" ? "You" : "Advisor"),
+        msg.text || ""
+      )
+    );
+  }
+  wrap.scrollTop = wrap.scrollHeight;
+}
+
+async function sendAIChat() {
+  const message = $("#ai-prompt").value.trim();
+  if (!message) return;
+  state.aiChat.push({ role: "user", text: message });
+  renderAIChatLog();
+  $("#ai-prompt").value = "";
+  $("#ai-answer").textContent = "thinking…";
+  clear($("#ai-actions"));
+  try {
+    const r = await wtmFetch("/api/v1/ai/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    const body = await r.json();
+    if (!r.ok) throw new Error((body.error && body.error.message) || r.statusText);
+    const answer = body.answer || "(empty)";
+    state.aiChat.push({ role: "assistant", text: answer });
+    renderAIChatLog();
+    $("#ai-answer").textContent = answer;
+    renderAIActionsIn($("#ai-actions"), body.actions || [], "Chat suggestions");
+    loadAIStatus();
+  } catch (e) {
+    const text = `error: ${e.message}`;
+    state.aiChat.push({ role: "assistant", text });
+    renderAIChatLog();
+    $("#ai-answer").textContent = text;
   }
 }
 
@@ -982,7 +1180,7 @@ function renderAIActionCard(sug) {
     approveBtn.disabled = true;
     approveBtn.textContent = "running…";
     try {
-      const r = await fetch("/api/v1/ai/execute", {
+      const r = await wtmFetch("/api/v1/ai/execute", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(sug),
       });
@@ -1022,7 +1220,7 @@ async function processAction(action, pid) {
     opts.body = JSON.stringify({ class: cls });
   }
   try {
-    const r = await fetch(url, opts);
+    const r = await wtmFetch(url, opts);
     const body = await r.json();
     if (!r.ok) alert((body.error && body.error.message) || r.statusText);
   } catch (e) { alert(e.message); }
@@ -1080,7 +1278,7 @@ function setupSSE() {
   let pollTimer = setInterval(async () => {
     if (state.snapshot && Date.now() - (state.lastUpdate || 0) < 3000) return;
     try {
-      const snap = await fetch("/api/v1/system").then((r) => r.json());
+      const snap = await wtmFetch("/api/v1/system").then((r) => r.json());
       applySnapshot(snap);
       setConn(true);
     } catch (e) { setConn(false); }
@@ -1120,6 +1318,7 @@ async function bootstrap() {
     processAction(act, parseInt(btn.dataset.pid, 10));
   });
   $("#ai-send").addEventListener("click", sendAI);
+  $("#ai-send-chat").addEventListener("click", sendAIChat);
   $("#ai-save").addEventListener("click", saveAIConfig);
   $("#tg-save").addEventListener("click", saveTelegramConfig);
   $("#ai-preset").addEventListener("change", (e) => applyPreset(e.target.value));
@@ -1129,6 +1328,11 @@ async function bootstrap() {
   rateSel.addEventListener("change", (e) => {
     state.renderMinInterval = parseInt(e.target.value, 10) || 1000;
     localStorage.setItem("wtm.renderMs", String(state.renderMinInterval));
+  });
+  $("#net-source").addEventListener("change", (e) => {
+    state.networkPreference = e.target.value || "auto";
+    localStorage.setItem("wtm.netSource", state.networkPreference);
+    if (state.snapshot) renderAll(state.snapshot);
   });
 
   $("#rules-add").addEventListener("click", addRule);
@@ -1144,15 +1348,16 @@ async function bootstrap() {
   });
 
   try {
-    const snap = await fetch("/api/v1/system").then((r) => r.json());
+    const snap = await wtmFetch("/api/v1/system").then((r) => r.json());
     applySnapshot(snap);
   } catch (e) { /* ignore */ }
+  syncLiveStripVisibility();
+  renderAIChatLog();
   loadConfig();
   loadInfo();
   loadAlerts();
   loadRules();
   loadAIPresets().then(loadAIConfig);
-  loadAIModels();
   loadTelegramConfig();
   loadAIStatus();
   loadAIWatch();

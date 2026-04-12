@@ -3,10 +3,23 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="wtm-csrf-token" content="__WTM_CSRF_TOKEN__" />
 <title>Windows Task Manager</title>
+<script>
+(() => {
+  const key = "wtm-theme";
+  const stored = localStorage.getItem(key) || "system";
+  const dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const resolved = stored === "system" ? (dark ? "dark" : "light") : stored;
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.dataset.themePreference = stored;
+})();
+</script>
 <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
+<a class="skip-link" href="#main-content">Skip to main content</a>
+<div id="sr-status" class="sr-only" aria-live="polite"></div>
 <header class="topbar">
   <h1>WTM</h1>
   <nav>
@@ -31,13 +44,37 @@
         <option value="5000">5s</option>
       </select>
     </label>
+    <label class="net-source-ctrl" title="Choose which network interface drives the NET numbers.">
+      <span>NET</span>
+      <select id="net-source">
+        <option value="auto">Auto</option>
+      </select>
+    </label>
+    <label class="theme-ctrl" title="Switch theme">
+      <span>Theme</span>
+      <select id="theme-select" aria-label="Switch theme">
+        <option value="system">System</option>
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
+      </select>
+    </label>
     <span id="ai-pill" class="badge ai-pill" hidden></span>
     <span id="conn" class="badge offline">offline</span>
     <span id="clock"></span>
   </div>
 </header>
 
-<main>
+<div id="network-banner" class="network-banner" hidden>Connection lost. Reconnecting to localhost dashboard…</div>
+
+<main id="main-content" tabindex="-1">
+  <section id="tab-live-strip" class="live-strip" hidden>
+    <div class="live-pill"><span class="label">CPU</span><span id="live-cpu">--</span></div>
+    <div class="live-pill"><span class="label">MEM</span><span id="live-mem">--</span></div>
+    <div class="live-pill"><span class="label">GPU</span><span id="live-gpu">--</span></div>
+    <div class="live-pill"><span class="label">NET</span><span id="live-net">--</span></div>
+    <div class="live-pill"><span class="label">PROC</span><span id="live-proc">--</span></div>
+  </section>
+
   <section id="tab-overview" class="tab-pane active">
     <div class="cards">
       <article class="card">
@@ -54,13 +91,13 @@
       </article>
       <article class="card">
         <h2>GPU</h2>
-        <div class="bigval"><span id="gpu-pct">--</span>%</div>
+        <div class="bigval"><span id="gpu-pct">--</span></div>
         <div class="muted" id="gpu-name">--</div>
       </article>
       <article class="card">
         <h2>Network</h2>
         <div class="bigval"><span id="net-down">0</span> ↓ <span id="net-up">0</span> ↑</div>
-        <div class="muted">interfaces: <span id="net-iface">0</span></div>
+        <div class="muted">interface: <span id="net-active">Auto</span> | visible: <span id="net-iface">0</span></div>
       </article>
     </div>
     <h3>Per-core utilization</h3>
@@ -121,9 +158,9 @@
 
   <section id="tab-rules" class="tab-pane">
     <div class="rules-header">
-      <div>
-        <h3 style="margin:0">Automation rules</h3>
-        <p class="muted" style="margin:4px 0">If a process matching <em>match</em> has <em>metric</em> <em>op</em> <em>threshold</em> for <em>for</em> seconds, run <em>action</em>.</p>
+      <div class="rules-copy">
+        <h3>Automation rules</h3>
+        <p class="muted">If a process matching <em>match</em> has <em>metric</em> <em>op</em> <em>threshold</em> for <em>for</em> seconds, run <em>action</em>.</p>
       </div>
       <div class="rules-actions">
         <button id="rules-add" type="button">+ Add rule</button>
@@ -255,8 +292,14 @@
       </div>
     </details>
 
-    <textarea id="ai-prompt" rows="4" placeholder="Ask a question… (optional — leave blank for a general health check)"></textarea>
-    <button id="ai-send">Analyze</button>
+    <div id="ai-chat-log" class="ai-chat-log">
+      <div class="ai-chat-empty muted">No chat yet. Ask about CPU spikes, noisy processes, or what action is safest.</div>
+    </div>
+    <textarea id="ai-prompt" rows="4" placeholder="Ask a question…"></textarea>
+    <div class="ai-chat-controls">
+      <button id="ai-send-chat">Send Chat</button>
+      <button id="ai-send" type="button">Analyze Snapshot</button>
+    </div>
     <pre id="ai-answer" class="ai-answer"></pre>
     <div id="ai-actions" class="ai-actions"></div>
   </section>

@@ -25,4 +25,7 @@ func TestHandleInfoIncludesSelfPID(t *testing.T) {
 	if got := int(body["self_pid"].(float64)); got != os.Getpid() {
 		t.Fatalf("self_pid=%d want %d", got, os.Getpid())
 	}
+	if got := body["version"].(string); got != "test-version" {
+		t.Fatalf("version=%q want %q", got, "test-version")
+	}
 }

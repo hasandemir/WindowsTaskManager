@@ -189,14 +189,28 @@ type AIAutoActionConfig struct {
 }
 
 type TelegramConfig struct {
-	Enabled          bool          `yaml:"enabled"`
-	BotToken         string        `yaml:"bot_token"`
-	AllowedChatIDs   []int64       `yaml:"allowed_chat_ids"`
-	APIBaseURL       string        `yaml:"api_base_url"`
-	PollTimeout      time.Duration `yaml:"poll_timeout"`
-	NotifyOnCritical bool          `yaml:"notify_on_critical"`
-	RequireConfirm   bool          `yaml:"require_confirm"`
-	ConfirmTTL       time.Duration `yaml:"confirm_ttl"`
+	Enabled           bool          `yaml:"enabled"`
+	BotToken          string        `yaml:"bot_token"`
+	AllowedChatIDs    []int64       `yaml:"allowed_chat_ids"`
+	APIBaseURL        string        `yaml:"api_base_url"`
+	PollTimeout       time.Duration `yaml:"poll_timeout"`
+	NotifyOnCritical  bool          `yaml:"notify_on_critical"`
+	NotificationMode  string        `yaml:"notification_mode"`
+	NotificationTypes []string      `yaml:"notification_types"`
+	RequireConfirm    bool          `yaml:"require_confirm"`
+	ConfirmTTL        time.Duration `yaml:"confirm_ttl"`
+}
+
+func DefaultTelegramNotificationTypes() []string {
+	return []string{
+		"runaway_cpu",
+		"memory_leak",
+		"port_conflict",
+		"new_process",
+		"network_anomaly",
+		"network_anomaly_system",
+		"rule:*",
+	}
 }
 
 // DefaultConfig returns sensible defaults for all settings.
@@ -352,14 +366,16 @@ func DefaultConfig() *Config {
 			},
 		},
 		Telegram: TelegramConfig{
-			Enabled:          false,
-			BotToken:         "",
-			AllowedChatIDs:   []int64{},
-			APIBaseURL:       "https://api.telegram.org",
-			PollTimeout:      25 * time.Second,
-			NotifyOnCritical: true,
-			RequireConfirm:   true,
-			ConfirmTTL:       90 * time.Second,
+			Enabled:           false,
+			BotToken:          "",
+			AllowedChatIDs:    []int64{},
+			APIBaseURL:        "https://api.telegram.org",
+			PollTimeout:       25 * time.Second,
+			NotifyOnCritical:  true,
+			NotificationMode:  "high_value",
+			NotificationTypes: DefaultTelegramNotificationTypes(),
+			RequireConfirm:    true,
+			ConfirmTTL:        90 * time.Second,
 		},
 		UI: UIConfig{
 			Theme:                "system",
@@ -422,6 +438,17 @@ func (c *Config) Validate() error {
 	}
 	if c.Telegram.PollTimeout < 5*time.Second {
 		c.Telegram.PollTimeout = 5 * time.Second
+	}
+	switch c.Telegram.NotificationMode {
+	case "", "high_value", "all_critical":
+		if c.Telegram.NotificationMode == "" {
+			c.Telegram.NotificationMode = "high_value"
+		}
+	default:
+		c.Telegram.NotificationMode = "high_value"
+	}
+	if len(c.Telegram.NotificationTypes) == 0 {
+		c.Telegram.NotificationTypes = DefaultTelegramNotificationTypes()
 	}
 	if c.Telegram.ConfirmTTL < 15*time.Second {
 		c.Telegram.ConfirmTTL = 15 * time.Second

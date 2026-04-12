@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ersinkoc/WindowsTaskManager/frontend"
 	"github.com/ersinkoc/WindowsTaskManager/internal/ai"
 	"github.com/ersinkoc/WindowsTaskManager/internal/anomaly"
 	"github.com/ersinkoc/WindowsTaskManager/internal/collector"
@@ -26,7 +27,6 @@ import (
 	"github.com/ersinkoc/WindowsTaskManager/internal/telegram"
 	"github.com/ersinkoc/WindowsTaskManager/internal/tray"
 	"github.com/ersinkoc/WindowsTaskManager/internal/winapi"
-	"github.com/ersinkoc/WindowsTaskManager/web"
 )
 
 // version is injected at build time via -ldflags "-X main.version=X.Y.Z".
@@ -85,7 +85,13 @@ func main() {
 	engine := anomaly.NewEngine(cfg, store, emitter, alerts)
 	engine.SetActuator(ctrl) // rules engine can kill/suspend via the controller
 	advisor := ai.NewAdvisor(cfg, store, alerts.Active, emitter)
-	tgBot := telegram.New(cfg, store, alerts, ctrl, emitter)
+	var srv *server.Server
+	tgBot := telegram.New(cfg, store, alerts, ctrl, advisor, func(suggestion ai.Suggestion) error {
+		if srv == nil {
+			return fmt.Errorf("server not initialized")
+		}
+		return srv.ExecuteAISuggestion(suggestion)
+	}, emitter)
 	var trayInst *tray.Tray
 
 	// Prime first snapshot before serving HTTP.
@@ -113,7 +119,7 @@ func main() {
 	// from any previous run's active set.
 	clearDisabledDetectorAlerts(alerts, cfg)
 
-	srv := server.New(server.Options{
+	srv = server.New(server.Options{
 		Cfg:        cfg,
 		CfgPath:    cfgPath,
 		OnCfgApply: applyConfig,
@@ -122,7 +128,8 @@ func main() {
 		Alerts:     alerts,
 		Emitter:    emitter,
 		Advisor:    advisor,
-		StaticFS:   web.FS(),
+		StaticFS:   frontend.FS(),
+		Version:    version,
 	})
 
 	rootCtx, cancel := context.WithCancel(context.Background())

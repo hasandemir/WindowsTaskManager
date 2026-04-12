@@ -187,12 +187,11 @@ func (s *Server) handleAIConfigUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.RLock()
-	current := *s.cfg
+	current := cloneConfig(s.cfg)
 	s.mu.RUnlock()
 
 	// Build the next config: clone the current one, then overwrite the AI block.
 	next := current
-	next.AI = current.AI
 	next.AI.Enabled = body.Enabled
 	next.AI.Provider = provider
 	if body.APIKey != "" {

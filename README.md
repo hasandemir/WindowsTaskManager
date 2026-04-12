@@ -1,277 +1,292 @@
 # Windows Task Manager (WTM)
 
-A single-binary, pure-Go alternative to the built-in Windows Task Manager
-that exposes a real-time web dashboard, REST API, anomaly detection engine,
-and an optional LLM advisor with an approve-before-execute action flow.
+WTM is a local-first Windows monitoring and control console shipped as a single executable. It collects live machine telemetry, exposes a localhost REST API, serves an embedded web UI, detects suspicious or unhealthy process behavior, and can optionally layer AI and Telegram workflows on top.
 
 Current release: [`v0.1.0`](https://github.com/ersinkoc/WindowsTaskManager/releases/tag/v0.1.0)
 
-Project history lives in [`CHANGELOG.md`](CHANGELOG.md), and the release
-checklist lives in [`RELEASING.md`](RELEASING.md).
+Project history lives in [`CHANGELOG.md`](CHANGELOG.md). Release notes and shipping steps live in [`RELEASING.md`](RELEASING.md).
 
-- **Pure Go.** No CGo, no WMI, no PowerShell. Direct Win32 API calls via
-  `golang.org/x/sys/windows`.
-- **Single executable.** The web UI is embedded with `embed.FS`. Drop
-  `wtm.exe` anywhere and run.
-- **Single instance guard.** A second `wtm.exe` copy refuses to start and
-  reopens the existing dashboard instead of launching a duplicate monitor.
-- **Live everything.** CPU (per-core), memory, GPU (best effort), disks,
-  network throughput, processes, process tree, TCP/UDP endpoints.
-- **Process control.** Kill / suspend / resume, priority, affinity, and
-  Job-Object-based CPU + memory caps — all gated by a configurable
-  protection list. WTM also protects its own running process from kill /
-  suspend style actions, and marks that row in the UI with a `WTM` badge.
-- **Per-process toggles.** Click the 🛡 on any row to protect a process
-  from kill/suspend, or 🔕 to hide it from the anomaly engine. Both lists
-  are persisted to `config.yaml`.
-- **Sortable process table.** Click any column header (PID, Name, CPU,
-  Memory, Threads) to sort; click again to flip direction. Persists
-  across reloads.
-- **Anomaly detection — conservative by default.** Eight built-in detectors.
-  Only the three that flag *actual* danger fire out of the box — the
-  rest are opt-in because they're noisy on normal developer workstations:
+## Highlights
 
-  | Detector | Default |
-  |---|---|
-  | `runaway_cpu` — sustained high CPU | **on** |
-  | `memory_leak` — linear-regression R² growth | **on** |
-  | `spawn_storm` — fork bomb (with shell/browser whitelist) | **on** |
-  | `hung_process` — idle, no prior activity, no I/O | off |
-  | `orphan` — parent gone and still burning CPU/RAM | off |
-  | `port_conflict` — duplicate listening ports | off |
-  | `network_anomaly` — σ-burst with min connection floor | off |
-  | `new_process` — first-seen executable from suspicious path | off |
+- Pure Go on the backend. No CGo, WMI, or PowerShell collectors in the hot path.
+- Single executable deployment. The frontend build from `frontend/dist` is embedded into the Go binary with `embed.FS`.
+- Single-instance guard. Starting a second copy reuses the existing dashboard instead of launching a duplicate monitor.
+- Live telemetry:
+  - CPU, per-core CPU, memory
+  - GPU utilization and VRAM
+  - Disk usage plus read/write throughput
+  - Network throughput and interface stats
+  - Processes, process tree, TCP/UDP bindings
+- Process actions:
+  - kill, suspend, resume
+  - priority and affinity changes
+  - resource limits
+  - self-protection for the WTM process
+- Automation rules:
+  - create and edit rules from the UI
+  - enable, disable, delete, and preview rules
+  - AI rule suggestions can open directly in the Rules page
+- Alerts and anomaly detection for runaway CPU, memory growth, spawn storms, and more
+- AI advisor with approve-before-execute suggestions
+- Telegram bot for alerting, triage, confirm-before-action process control, and AI usage
+- Live config reload from `config.yaml`
 
-- **Automation rules.** Write YAML (or use the Rules tab) to say *"if
-  `chrome.exe` uses ≥ 4 GB for 30 s, kill it"*. Rules hot-reload and
-  respect the same protect list as the manual controls.
-- **AI advisor with approve-before-execute.** Talk to Anthropic Claude
-  *or any OpenAI-compatible provider* (OpenAI, OpenRouter, Groq,
-  DeepSeek, Together, Mistral, Fireworks, xAI, Ollama, LM Studio, …).
-  The advisor embeds a structured `<actions>` block in its reply; the
-  UI parses it into per-card *Approve / Dismiss* buttons. Nothing runs
-  until you click Approve. Supported action types: `kill`, `suspend`,
-  `protect`, `ignore`, `add_rule`.
-- **Optional background AI watch.** Critical alerts can trigger a
-  budgeted background AI assessment with a minimum interval, hourly
-  cycle cap, and daily reserved-token cap. It never auto-executes
-  actions in this phase; it only surfaces a fresh diagnosis plus
-  approvable suggestions in the AI tab.
-- **System tray.** Native NotifyIcon with rate-limited balloon
-  notifications. Right-click for menu.
-- **Telegram rescue bot.** Optional long-polling bot for emergency remote
-  control: inspect status / top CPU / alerts and, if needed, kill or
-  suspend a process through the same protection rules the local UI uses.
-- **Configurable.** YAML config with live reload and schema migration —
-  edit, save, no restart.
+## Architecture
 
-## Building
+```text
+cmd/wtm                 entry point, flags, lifecycle wiring
+frontend/               React + Vite web UI, embedded from dist/
+internal/ai             advisor, prompt shaping, action parsing, background watch
+internal/anomaly        anomaly engine, alert store, rule evaluation
+internal/collector      CPU, memory, process, tree, ports, disk, GPU, network collection
+internal/config         YAML config, validation, schema migration, watcher
+internal/controller     process actions and safeguards
+internal/event          pub/sub emitter
+internal/server         REST API, SSE stream, config endpoints, embedded UI serving
+internal/storage        in-memory snapshot and history store
+internal/telegram       Telegram bot, filtering, confirm flow, AI commands
+internal/tray           system tray integration
+internal/winapi         raw Win32 wrappers
+configs/                reference config
+web/                    legacy UI remnants kept only as fallback/reference
+```
+
+## Prerequisites
+
+- Windows
+- Go `1.23+`
+- Node.js `20+` if you want to change the frontend
+
+## Build
+
+### Release-style build
 
 ```powershell
 .\build.ps1
 ```
 
-This produces `wtm.exe` (~12 MB, no console window).
+This produces `wtm.exe`.
 
-For a quick dev build:
+### Direct Go build
 
-```bash
+```powershell
 go build -o wtm.exe ./cmd/wtm
 ```
 
-## Running
+### Frontend build
+
+If you change anything under `frontend/`, rebuild the embedded UI first:
+
+```powershell
+cd frontend
+npm install
+npm run build
+cd ..
+go build -o wtm.exe ./cmd/wtm
+```
+
+`build.ps1` currently runs `go mod tidy`, `go fmt`, `go vet`, and then builds the Windows binary. It does not run the frontend build for you.
+
+## Run
 
 ```powershell
 .\wtm.exe
 ```
 
-The dashboard opens automatically at `http://127.0.0.1:19876`. The tray
-icon appears in the notification area; right-click for menu, double-click
-to reopen the dashboard.
+By default the dashboard opens at:
+
+```text
+http://127.0.0.1:19876
+```
+
+The tray icon appears in the notification area unless you disable it with a flag.
 
 ### Flags
 
 | Flag | Description |
 |---|---|
-| `--config <path>` | Override config file location |
-| `--no-tray` | Disable system tray (run headless) |
-| `--no-browser` | Don't auto-open the dashboard |
+| `--config <path>` | Override config location |
+| `--no-tray` | Disable tray icon |
+| `--no-browser` | Do not auto-open the dashboard |
 | `--version` | Print version and exit |
 
-### Config file
+## Frontend
 
-On first run, WTM writes a default config to:
+The current UI is in `frontend/` and is built with:
 
-```
+- React 19
+- React Router 7
+- TypeScript
+- Vite
+- TanStack Query
+- Zustand
+- React Hook Form
+- Zod
+
+Key pages:
+
+- `Overview`
+- `Processes`
+- `Tree`
+- `Ports`
+- `Disks`
+- `Alerts`
+- `Rules`
+- `AI`
+- `Settings`
+- `About`
+
+Notable UI behaviors:
+
+- live status strip on most pages
+- sortable process and port views
+- process safety guardrails around destructive actions
+- rule presets, preview, inline edit, and delete confirmation
+- AI suggestions that can be approved directly or opened in Rules
+
+## Config
+
+Default config location:
+
+```text
 %APPDATA%\WindowsTaskManager\config.yaml
 ```
 
-You can also drop a `config.yaml` next to `wtm.exe` and it will be used in
-preference. Edits to either file are picked up live.
+If a `config.yaml` exists next to `wtm.exe`, WTM prefers it.
 
-The file starts with a `schema_version:` field. When you upgrade to a
-new WTM binary that ships a breaking defaults change, the loader
-rewrites the affected sections in place on first launch — your
-`ignore_processes` list and protected-process list are preserved, the
-rest is reset to the new defaults.
+A reference config lives at [`configs/default.yaml`](configs/default.yaml).
 
-A reference copy lives at [`configs/default.yaml`](configs/default.yaml).
+WTM hot-reloads config changes through the native watcher and applies them live.
 
-Notable `anomaly:` knobs:
+Important config areas:
 
-- `anomaly.ignore_processes` — executable names the engine should skip
-  entirely. Populated from the UI's 🔕 toggle too.
-- `anomaly.max_active_alerts` — hard cap on the active alert set so a
-  misbehaving detector can't drown the UI.
+- `monitoring`: collector cadence, history, max process limits
+- `controller`: protection list and kill confirmation behavior
+- `anomaly`: detector toggles and thresholds
+- `notifications`: tray balloon settings
+- `ai`: provider, endpoint, model, limits, scheduler, auto-action policy
+- `telegram`: bot token, chat allowlist, confirm flow, notification filtering
+- `ui`: theme, default sort, refresh rate, table defaults
 
-### AI advisor
+## Settings UI
 
-Two providers are supported:
+The `Settings` page is the main control surface for:
 
-- `provider: anthropic` → Anthropic Messages API (`/v1/messages`). If
-  you point `endpoint:` at an Anthropic-compatible proxy (e.g. z.ai)
-  that doesn't already end in `/v1/messages`, WTM appends it for you.
-- `provider: openai` → any OpenAI-compatible `/v1/chat/completions`
-  endpoint — OpenAI, OpenRouter, Groq, DeepSeek, Together, Mistral,
-  Fireworks, xAI, Ollama, LM Studio, vLLM, llama.cpp's server, …
+- AI provider and model setup
+- Telegram bot configuration
+- notification mode and alert type allowlist
+- collector/runtime settings
+- UI defaults
 
-You can configure it three ways:
+The old "AI tab owns all provider settings" flow is no longer the main path. Provider and Telegram configuration now live in `Settings`.
 
-1. **From the dashboard** — open the **AI** tab, expand
-   *Provider settings*, pick a preset (or fill the fields manually) and
-   click **Save**. The change is written back to `config.yaml` and
-   applied live.
-2. **By editing `config.yaml`** — see the `ai:` block in
-   [`configs/default.yaml`](configs/default.yaml). Edits are picked up by
-   the file watcher within ~2 seconds.
-3. **Via the REST API** — `POST /api/v1/ai/config` with the same JSON
-   shape returned by `GET /api/v1/ai/config`.
+## Alerts and anomaly detection
 
-Examples:
+WTM ships with a conservative default posture. Some detectors are enabled by default, while noisier ones can stay off until you want them.
 
-These examples intentionally use current model names rather than older
-`gpt-4o-mini` / `claude-3.5-sonnet` style picks. For Anthropic, the example
-uses a current dated snapshot because Anthropic recommends fixed model
-versions in production. If a provider rotates aliases again, prefer the
-newest official model listed in that provider's docs.
+Examples of supported alert types include:
 
-```yaml
-# Anthropic Claude (default)
-ai:
-  enabled: true
-  provider: anthropic
-  api_key: sk-ant-...
-  model: claude-sonnet-4-20250514
-  language: en
+- `runaway_cpu`
+- `memory_leak`
+- `spawn_storm`
+- `hung_process`
+- `orphan`
+- `port_conflict`
+- `network_anomaly`
+- `new_process`
+- `rule:<name>`
 
-# OpenAI
-ai:
-  enabled: true
-  provider: openai
-  api_key: sk-...
-  model: gpt-5-mini
+The UI supports:
 
-# OpenRouter (single key, hundreds of models)
-ai:
-  enabled: true
-  provider: openai
-  endpoint: https://openrouter.ai/api/v1/chat/completions
-  api_key: sk-or-v1-...
-  model: openrouter/auto
-  extra_headers:
-    HTTP-Referer: http://localhost
-    X-Title: WTM
+- active alert review
+- history review
+- dismiss
+- snooze
 
-# Or pin a current OpenRouter model explicitly
-# model: anthropic/claude-sonnet-4.5
+Telegram supports a higher-signal notification mode so noisy criticals do not flood chat by default.
 
-# Groq (very fast Llama / Mixtral)
-ai:
-  enabled: true
-  provider: openai
-  endpoint: https://api.groq.com/openai/v1/chat/completions
-  api_key: gsk_...
-  model: llama-3.3-70b-versatile
+## Rules
 
-# DeepSeek
-ai:
-  enabled: true
-  provider: openai
-  endpoint: https://api.deepseek.com/v1/chat/completions
-  api_key: sk-...
-  model: deepseek-chat
+Rules let you describe conditions like:
 
-# Local Ollama
-ai:
-  enabled: true
-  provider: openai
-  endpoint: http://localhost:11434/v1/chat/completions
-  api_key: ollama         # any non-empty string
-  model: llama3.1
+> If `chrome.exe` uses more than `4 GB` for `30 seconds`, raise an alert.
 
-# Local LM Studio
-ai:
-  enabled: true
-  provider: openai
-  endpoint: http://localhost:1234/v1/chat/completions
-  api_key: lm-studio
-  model: local-model
-```
+or
 
-The current snapshot, top processes, and active alerts are sent as
-context with every request. Responses are cached for 60 s and rate-limited
-to `max_requests_per_minute`.
+> If `some-worker.exe` exceeds `300` threads for `20 seconds`, suspend it.
 
-**Background watch.** If you want AI to react to critical alerts without
-manually pressing Analyze, enable `ai.scheduler.enabled: true`. The
-watcher listens for newly raised `critical` anomaly alerts and runs a
-background AI pass, but only if all of these guards allow it:
+Current rule workflow:
 
-- `ai.auto_analyze_on_critical: true`
-- at least `ai.scheduler.min_interval` since the last background pass
-- fewer than `ai.scheduler.max_cycles_per_hour` background passes in the last hour
-- fewer than `ai.scheduler.max_reserved_tokens_per_day` reserved output tokens for the day
+- add rule from the Rules page
+- choose metric, operator, threshold, action, hold time, cooldown
+- preview the final behavior before saving
+- edit existing rules inline
+- enable or disable existing rules
+- delete rules with confirmation
+- open AI-generated `add_rule` suggestions directly in the Rules form
 
-The latest background diagnosis, suggestion cards, and recent run log are
-shown in the AI tab and available from `GET /api/v1/ai/watch`.
+Rules are persisted through `POST /api/v1/rules`, which replaces the current ruleset with the submitted list.
 
-You can also enable a deterministic dry-run auto-action policy:
+## AI advisor
 
-- `ai.auto_action.enabled: true`
-- `ai.auto_action.dry_run: true`
-- `ai.auto_action.allowed_actions: [ignore, protect, add_rule]`
-- `ai.auto_action.require_repeat_cycles: 2`
+WTM supports:
 
-This does **not** execute anything automatically yet. It only marks
-background suggestions as `blocked`, `needs_repeat`, or `dry_run_eligible`
-so you can see which recommendations would qualify under a future
-auto-execution policy.
+- interactive AI chat
+- one-shot snapshot analysis
+- structured action suggestions
+- background AI watch for critical alerts
 
-### Telegram rescue bot
+Supported suggestion types:
 
-WTM can also expose a small Telegram bot for "machine is choking, UI barely
-opens" moments. The bot uses long polling via the official Telegram Bot API
-and only responds to whitelisted chat IDs.
+- `kill`
+- `suspend`
+- `protect`
+- `ignore`
+- `add_rule`
 
-Example config:
+Nothing is executed automatically from the normal UI flow. Suggestions must be explicitly approved.
 
-```yaml
-telegram:
-  enabled: true
-  bot_token: 123456:ABC...
-  allowed_chat_ids:
-    - 123456789
-  api_base_url: https://api.telegram.org
-  poll_timeout: 25s
-  notify_on_critical: true
-  require_confirm: true
-  confirm_ttl: 90s
-```
+### Supported provider modes
 
-You can also edit the same settings from the **AI** tab under
-**Telegram rescue bot**.
+- `provider: anthropic`
+- `provider: openai` for OpenAI-compatible endpoints
 
-Supported commands:
+That means you can point WTM at providers such as:
+
+- Anthropic
+- OpenAI
+- OpenRouter
+- Groq
+- DeepSeek
+- Ollama
+- LM Studio
+
+### AI endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/v1/ai/status` | AI status and current provider/model |
+| GET | `/api/v1/ai/watch` | background AI watch state |
+| POST | `/api/v1/ai/analyze` | one-shot snapshot analysis |
+| POST | `/api/v1/ai/chat` | multi-turn chat |
+| POST | `/api/v1/ai/execute` | execute an approved suggestion |
+| GET | `/api/v1/ai/config` | current AI config |
+| POST | `/api/v1/ai/config` | update AI config |
+| GET | `/api/v1/ai/presets` | starter provider presets |
+| GET | `/api/v1/ai/models` | model discovery endpoint |
+
+## Telegram bot
+
+The Telegram bot is intended for "the box is unhealthy and I need a remote control path" scenarios.
+
+It supports:
+
+- alert notifications
+- status inspection
+- process actions with confirm codes
+- AI chat and AI analysis
+
+Useful commands:
 
 - `/status`
 - `/topcpu`
@@ -283,102 +298,102 @@ Supported commands:
 - `/suspendtop`
 - `/confirm <code>`
 - `/cancel <code>`
+- `/ask <question>`
+- `/analyze <question>`
 
-Destructive commands still go through the normal controller safety checks:
-protected and critical processes remain protected, and the bot only works
-for `allowed_chat_ids`.
+Notification behavior:
 
-By default, destructive Telegram actions are two-step:
+- `notification_mode: high_value` is the safer default
+- `notification_types` can be tuned so only valuable alerts reach chat
+- destructive actions still pass through the same controller safeguards as the local UI
 
-1. `/kill 1234` or `/killtop` creates a short-lived pending action.
-2. The bot replies with a one-time code such as `/confirm ABCD1234`.
-3. You can cancel it with `/cancel ABCD1234` until `telegram.confirm_ttl` expires.
+## REST API
 
-That keeps the "machine is freezing" rescue flow fast, while reducing the
-chance of an accidental remote kill from a fat-fingered chat command.
+WTM serves a local-only API on loopback and protects mutating routes with localhost assumptions, origin checks, and a CSRF header.
 
-**Action flow.** The advisor is prompted to end its reply with an
-`<actions>[...]</actions>` block. The server parses it into
-`Suggestion` records with stable hashed IDs and returns them alongside
-the human answer. The UI renders each suggestion as a card with Approve
-and Dismiss buttons; clicking Approve POSTs the full suggestion to
-`POST /api/v1/ai/execute` which dispatches to the controller (kill /
-suspend), mutates `config.yaml` (protect / ignore / add_rule), and
-applies the change live. `kill` and `suspend` are refused for processes
-on the protection list or flagged critical.
+Selected endpoints:
 
-## Architecture
+### System
 
+| Method | Path |
+|---|---|
+| GET | `/api/v1/system` |
+| GET | `/api/v1/cpu` |
+| GET | `/api/v1/memory` |
+| GET | `/api/v1/gpu` |
+| GET | `/api/v1/disk` |
+| GET | `/api/v1/network` |
+| GET | `/api/v1/history` |
+| GET | `/api/v1/info` |
+| GET | `/api/v1/health` |
+
+### Processes
+
+| Method | Path |
+|---|---|
+| GET | `/api/v1/processes` |
+| GET | `/api/v1/processes/tree` |
+| GET | `/api/v1/processes/:pid` |
+| GET | `/api/v1/processes/:pid/history` |
+| GET | `/api/v1/processes/:pid/children` |
+| GET | `/api/v1/processes/:pid/connections` |
+| POST | `/api/v1/processes/:pid/kill` |
+| POST | `/api/v1/processes/:pid/kill-tree` |
+| POST | `/api/v1/processes/:pid/suspend` |
+| POST | `/api/v1/processes/:pid/resume` |
+| POST | `/api/v1/processes/:pid/priority` |
+| POST | `/api/v1/processes/:pid/affinity` |
+| POST | `/api/v1/processes/:pid/limit` |
+| DELETE | `/api/v1/processes/:pid/limit` |
+| GET | `/api/v1/processes/limits` |
+
+### Ports, alerts, rules, config
+
+| Method | Path |
+|---|---|
+| GET | `/api/v1/ports` |
+| GET | `/api/v1/connections` |
+| GET | `/api/v1/alerts` |
+| GET | `/api/v1/alerts/history` |
+| POST | `/api/v1/alerts/clear` |
+| POST | `/api/v1/alerts/:type/dismiss` |
+| POST | `/api/v1/alerts/:type/:pid/dismiss` |
+| POST | `/api/v1/alerts/:type/snooze` |
+| POST | `/api/v1/alerts/:type/:pid/snooze` |
+| GET | `/api/v1/rules` |
+| POST | `/api/v1/rules` |
+| GET | `/api/v1/config` |
+| PUT | `/api/v1/config` |
+| POST | `/api/v1/config/protect` |
+| POST | `/api/v1/config/ignore` |
+| GET | `/api/v1/stream` |
+
+## Security and safety
+
+- Localhost-only API
+- mutation guard with CSRF token
+- confirm-before-action behavior for risky paths
+- WTM protects its own process
+- protected-process list is enforced across UI, AI, and Telegram control paths
+
+## Development checks
+
+Backend:
+
+```powershell
+go test ./... -count=1
+go vet ./...
+go build ./cmd/wtm
 ```
-cmd/wtm                 # entry point + flag parsing + supervision
-internal/winapi         # raw Win32 syscall wrappers (kernel32, ntdll, ...)
-internal/stats          # Welford, linear regression, EMA, ring buffer
-internal/config         # YAML loader + schema migration + file watcher
-internal/event          # tiny pub/sub emitter
-internal/metrics        # shared metric struct definitions
-internal/storage        # in-memory ring storage for snapshots + per-PID history
-internal/collector      # CPU/mem/process/tree/net/ports/disk/GPU collectors
-internal/controller     # kill/suspend/priority/affinity/Job Object limits
-internal/anomaly        # detection engine + 8 detectors + alert store
-internal/server         # HTTP router, REST handlers, SSE hub, static UI
-internal/ai             # Advisor + anthropic/openai clients + actions parser
-internal/tray           # Win32 NotifyIcon + message-pump + balloon notifications
-internal/platform       # admin elevation helpers
-web/                    # embedded dashboard (HTML / CSS / vanilla JS)
-configs/                # reference default config
+
+Frontend:
+
+```powershell
+cd frontend
+npm test
+npm run build
 ```
-
-## REST API (selected)
-
-Every endpoint is local-only (loopback). The full list lives in
-[`internal/server/handlers.go`](internal/server/handlers.go).
-
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/v1/system` | Latest full system snapshot |
-| GET | `/api/v1/processes?sort=cpu&limit=50` | Process list |
-| GET | `/api/v1/processes/{pid}` | Single process |
-| GET | `/api/v1/processes/{pid}/history` | Per-process metrics history |
-| POST | `/api/v1/processes/{pid}/kill?confirm=true` | Terminate process |
-| POST | `/api/v1/processes/{pid}/kill-tree?confirm=true` | Terminate subtree |
-| POST | `/api/v1/processes/{pid}/suspend` | Pause all threads |
-| POST | `/api/v1/processes/{pid}/resume` | Resume all threads |
-| POST | `/api/v1/processes/{pid}/priority` | `{"class":"high"}` |
-| POST | `/api/v1/processes/{pid}/affinity` | `{"mask":15}` |
-| POST | `/api/v1/processes/{pid}/limit` | `{"cpu_pct":25,"mem_bytes":1073741824}` |
-| GET | `/api/v1/ports` | TCP/UDP endpoints with PIDs |
-| GET | `/api/v1/alerts` | Active anomaly alerts |
-| POST | `/api/v1/alerts/clear` | Wipe the active alert set |
-| GET | `/api/v1/stream` | Server-Sent Events (snapshot + alerts) |
-| GET | `/api/v1/config` | Current effective config (api keys masked) |
-| POST | `/api/v1/config/protect` | Toggle per-process protect list |
-| POST | `/api/v1/config/ignore` | Toggle per-process anomaly ignore list |
-| POST | `/api/v1/ai/analyze` | `{"prompt":"..."}` — returns answer + actions |
-| POST | `/api/v1/ai/execute` | Execute an approved AI suggestion |
-| GET | `/api/v1/ai/status` | Provider, model, rate-limit, cache stats |
-| GET | `/api/v1/ai/config` | Current AI block (api key masked) |
-| POST | `/api/v1/ai/config` | Update provider/model/key/headers; persists to `config.yaml` |
-| GET | `/api/v1/ai/presets` | Curated list of provider/model starter templates |
-
-## Permissions
-
-WTM works fine without admin rights but some features will be limited:
-
-- Without elevation, querying memory/IO for system processes returns
-  partial data.
-- Killing/suspending privileged processes requires admin.
-- The protection list (`controller.protected_processes`) is enforced
-  regardless of privilege.
-
-The `controller.confirm_kill_system: true` setting requires explicit
-`?confirm=true` for any executable under `C:\Windows\`.
-
-## Author & links
-
-Built by **Ersin Koç** — <https://github.com/ersinkoc/WindowsTaskManager>
-
-Issues, PRs and feature requests welcome.
 
 ## License
 
-MIT — see [LICENSE](LICENSE) if present.
+MIT. See [LICENSE](LICENSE).

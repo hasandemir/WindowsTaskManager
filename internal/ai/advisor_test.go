@@ -191,6 +191,51 @@ func TestUnknownProviderError(t *testing.T) {
 	}
 }
 
+func TestChatCarriesRecentConversation(t *testing.T) {
+	var prompts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req openaiRequest
+		_ = json.Unmarshal(body, &req)
+		if len(req.Messages) > 1 {
+			prompts = append(prompts, req.Messages[1].Content)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"chat reply"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.AI.Enabled = true
+	cfg.AI.Provider = "openai"
+	cfg.AI.APIKey = "sk-test"
+	cfg.AI.Endpoint = srv.URL
+	cfg.AI.MaxTokens = 128
+	cfg.AI.MaxRequestsPerMinute = 60
+
+	a := NewAdvisor(cfg, storage.NewStore(60, 10), func() []anomaly.Alert { return nil }, nil)
+	if _, err := a.Chat(context.Background(), "What is using the CPU?"); err != nil {
+		t.Fatalf("first chat: %v", err)
+	}
+	if _, err := a.Chat(context.Background(), "What should I kill first?"); err != nil {
+		t.Fatalf("second chat: %v", err)
+	}
+	if len(prompts) != 2 {
+		t.Fatalf("prompts=%d want 2", len(prompts))
+	}
+	if strings.Contains(prompts[0], "## RECENT CHAT") {
+		t.Fatalf("first prompt should not include chat history: %q", prompts[0])
+	}
+	if !strings.Contains(prompts[1], "## RECENT CHAT") {
+		t.Fatalf("second prompt missing history: %q", prompts[1])
+	}
+	if !strings.Contains(prompts[1], "User: What is using the CPU?") {
+		t.Fatalf("second prompt missing prior user turn: %q", prompts[1])
+	}
+	if !strings.Contains(prompts[1], "Assistant: chat reply") {
+		t.Fatalf("second prompt missing prior assistant turn: %q", prompts[1])
+	}
+}
+
 func TestBackgroundWatchRunsOnCriticalAlert(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"background diagnosis<actions>[{\"type\":\"ignore\",\"name\":\"node.exe\",\"reason\":\"known dev burst\"}]</actions>"}}]}`))

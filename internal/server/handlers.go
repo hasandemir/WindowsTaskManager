@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"os"
@@ -19,7 +20,9 @@ import (
 // routes wires every endpoint onto the router.
 func (s *Server) routes() {
 	s.router.Use(loggingMiddleware)
+	s.router.Use(securityHeadersMiddleware)
 	s.router.Use(localOnlyMiddleware)
+	s.router.Use(mutationGuardMiddleware(s.csrfToken))
 
 	// System endpoints.
 	s.router.GET("/api/v1/system", s.handleSystem)
@@ -37,6 +40,8 @@ func (s *Server) routes() {
 	s.router.GET("/api/v1/processes/tree", s.handleProcessTree)
 	s.router.GET("/api/v1/processes/:pid", s.handleProcessByID)
 	s.router.GET("/api/v1/processes/:pid/history", s.handleProcessHistory)
+	s.router.GET("/api/v1/processes/:pid/children", s.handleProcessChildren)
+	s.router.GET("/api/v1/processes/:pid/connections", s.handleProcessConnections)
 	s.router.POST("/api/v1/processes/:pid/kill", s.handleKill)
 	s.router.POST("/api/v1/processes/:pid/kill-tree", s.handleKillTree)
 	s.router.POST("/api/v1/processes/:pid/suspend", s.handleSuspend)
@@ -49,19 +54,26 @@ func (s *Server) routes() {
 
 	// Port and connection endpoints.
 	s.router.GET("/api/v1/ports", s.handlePorts)
+	s.router.GET("/api/v1/connections", s.handleConnections)
 
 	// Anomaly endpoints.
 	s.router.GET("/api/v1/alerts", s.handleAlerts)
 	s.router.GET("/api/v1/alerts/history", s.handleAlertHistory)
 	s.router.POST("/api/v1/alerts/clear", s.handleAlertsClear)
+	s.router.POST("/api/v1/alerts/:type/dismiss", s.handleAlertDismiss)
+	s.router.POST("/api/v1/alerts/:type/:pid/dismiss", s.handleAlertDismiss)
+	s.router.POST("/api/v1/alerts/:type/snooze", s.handleAlertSnooze)
+	s.router.POST("/api/v1/alerts/:type/:pid/snooze", s.handleAlertSnooze)
 
 	// Config endpoints.
 	s.router.GET("/api/v1/config", s.handleConfigGet)
+	s.router.PUT("/api/v1/config", s.handleConfigUpdate)
 
 	// AI advisor endpoints.
 	s.router.GET("/api/v1/ai/status", s.handleAIStatus)
 	s.router.GET("/api/v1/ai/watch", s.handleAIWatch)
 	s.router.POST("/api/v1/ai/analyze", s.handleAIAnalyze)
+	s.router.POST("/api/v1/ai/chat", s.handleAIChat)
 	s.router.POST("/api/v1/ai/execute", s.handleAIExecute)
 	s.router.GET("/api/v1/ai/config", s.handleAIConfigGet)
 	s.router.POST("/api/v1/ai/config", s.handleAIConfigUpdate)
@@ -153,7 +165,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfg
 	s.mu.RUnlock()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version":         "1.0.0",
+		"version":         s.version,
 		"go_version":      runtime.Version(),
 		"num_cpu":         runtime.NumCPU(),
 		"goroutines":      runtime.NumGoroutine(),
@@ -262,6 +274,44 @@ func (s *Server) handleProcessHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.store.ProcessHistory(pid))
+}
+
+func (s *Server) handleProcessChildren(w http.ResponseWriter, r *http.Request) {
+	pid, ok := parseUint32Param(w, r, "pid")
+	if !ok {
+		return
+	}
+	snap := s.store.Latest()
+	if snap == nil {
+		writeError(w, http.StatusServiceUnavailable, "no_data", "no snapshot yet")
+		return
+	}
+	children := make([]metrics.ProcessInfo, 0)
+	for _, proc := range snap.Processes {
+		if proc.ParentPID == pid {
+			children = append(children, proc)
+		}
+	}
+	writeJSON(w, http.StatusOK, children)
+}
+
+func (s *Server) handleProcessConnections(w http.ResponseWriter, r *http.Request) {
+	pid, ok := parseUint32Param(w, r, "pid")
+	if !ok {
+		return
+	}
+	snap := s.store.Latest()
+	if snap == nil {
+		writeError(w, http.StatusServiceUnavailable, "no_data", "no snapshot yet")
+		return
+	}
+	rows := make([]metrics.PortBinding, 0)
+	for _, binding := range snap.PortBindings {
+		if binding.PID == pid {
+			rows = append(rows, binding)
+		}
+	}
+	writeJSON(w, http.StatusOK, rows)
 }
 
 func (s *Server) handleKill(w http.ResponseWriter, r *http.Request) {
@@ -414,6 +464,30 @@ func (s *Server) handlePorts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, snap.PortBindings)
 }
 
+func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
+	snap := s.store.Latest()
+	if snap == nil {
+		writeError(w, http.StatusServiceUnavailable, "no_data", "no snapshot yet")
+		return
+	}
+	rows := append([]metrics.PortBinding(nil), snap.PortBindings...)
+	if rawPID := strings.TrimSpace(r.URL.Query().Get("pid")); rawPID != "" {
+		pid, err := strconv.ParseUint(rawPID, 10, 32)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_pid", "pid must be uint32")
+			return
+		}
+		out := rows[:0]
+		for _, row := range rows {
+			if row.PID == uint32(pid) {
+				out = append(out, row)
+			}
+		}
+		rows = out
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.alerts.Active())
 }
@@ -428,6 +502,50 @@ func (s *Server) handleAlertHistory(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAlertsClear(w http.ResponseWriter, r *http.Request) {
 	removed := s.alerts.ClearAll()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": removed})
+}
+
+func (s *Server) handleAlertDismiss(w http.ResponseWriter, r *http.Request) {
+	key, ok := alertKeyFromRequest(w, r)
+	if !ok {
+		return
+	}
+	s.alerts.ClearByKey(key)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": key})
+}
+
+func (s *Server) handleAlertSnooze(w http.ResponseWriter, r *http.Request) {
+	typeName := strings.TrimSpace(Param(r, "type"))
+	if typeName == "" {
+		writeError(w, http.StatusBadRequest, "missing_param", "type required")
+		return
+	}
+	var pid uint32
+	if rawPID := Param(r, "pid"); rawPID != "" {
+		n, err := strconv.ParseUint(rawPID, 10, 32)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_param", "pid must be uint32")
+			return
+		}
+		pid = uint32(n)
+	}
+	duration := 30 * time.Minute
+	if raw := strings.TrimSpace(r.URL.Query().Get("duration")); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid_duration", "duration must be a positive Go duration like 30m")
+			return
+		}
+		duration = parsed
+	}
+	until := time.Now().Add(duration)
+	s.alerts.Snooze(typeName, pid, until)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":          true,
+		"type":        typeName,
+		"pid":         pid,
+		"snoozed_for": duration.String(),
+		"until":       until,
+	})
 }
 
 func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
@@ -477,6 +595,33 @@ func (s *Server) handleAIAnalyze(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
+	if s.advisor == nil || !s.advisor.Enabled() {
+		writeError(w, http.StatusServiceUnavailable, "ai_disabled", "AI advisor not configured")
+		return
+	}
+	var body struct {
+		Message string `json:"message"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if strings.TrimSpace(body.Message) == "" {
+		writeError(w, http.StatusBadRequest, "invalid_message", "message required")
+		return
+	}
+	resp, err := s.advisor.Chat(r.Context(), body.Message)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "ai_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"answer":  resp.Answer,
+		"actions": resp.Actions,
+		"cached":  resp.Cached,
+	})
+}
+
 // ----- static UI handler -----
 
 func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
@@ -497,8 +642,7 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer f2.Close()
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = io.Copy(w, f2)
+		serveIndexHTML(w, f2, s.csrfToken)
 		return
 	}
 	defer f.Close()
@@ -507,8 +651,23 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if strings.EqualFold(upath, "index.html") {
+		serveIndexHTML(w, f, s.csrfToken)
+		return
+	}
 	w.Header().Set("Content-Type", contentTypeFor(upath))
 	_, _ = io.Copy(w, f)
+}
+
+func serveIndexHTML(w http.ResponseWriter, r io.Reader, csrfToken string) {
+	body, err := io.ReadAll(r)
+	if err != nil {
+		http.Error(w, "failed to read index", http.StatusInternalServerError)
+		return
+	}
+	body = bytes.ReplaceAll(body, []byte("__WTM_CSRF_TOKEN__"), []byte(csrfToken))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(body)
 }
 
 func contentTypeFor(name string) string {
@@ -529,4 +688,26 @@ func contentTypeFor(name string) string {
 		return "image/x-icon"
 	}
 	return "application/octet-stream"
+}
+
+func alertKeyFromRequest(w http.ResponseWriter, r *http.Request) (string, bool) {
+	typeName := strings.TrimSpace(Param(r, "type"))
+	if typeName == "" {
+		writeError(w, http.StatusBadRequest, "missing_param", "type required")
+		return "", false
+	}
+	var pid uint32
+	if rawPID := Param(r, "pid"); rawPID != "" {
+		n, err := strconv.ParseUint(rawPID, 10, 32)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_param", "pid must be uint32")
+			return "", false
+		}
+		pid = uint32(n)
+	}
+	key := typeName
+	if pid > 0 {
+		key += "/" + strconv.FormatUint(uint64(pid), 10)
+	}
+	return key, true
 }

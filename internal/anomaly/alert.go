@@ -34,6 +34,7 @@ type AlertStore struct {
 	mu         sync.RWMutex
 	active     map[string]*Alert
 	history    []Alert
+	snoozed    map[string]time.Time
 	maxHistory int
 	maxActive  int
 	nextID     uint64
@@ -46,9 +47,18 @@ func NewAlertStore(maxHistory int) *AlertStore {
 	return &AlertStore{
 		active:     make(map[string]*Alert),
 		history:    make([]Alert, 0, maxHistory),
+		snoozed:    make(map[string]time.Time),
 		maxHistory: maxHistory,
 		maxActive:  200,
 	}
+}
+
+func alertKey(typeName string, pid uint32) string {
+	key := typeName
+	if pid > 0 {
+		key = typeName + "/" + uint32ToA(pid)
+	}
+	return key
 }
 
 // SetMaxActive updates the active-alert cap. Called when config is (re)loaded
@@ -60,13 +70,15 @@ func (s *AlertStore) SetMaxActive(n int) {
 	s.mu.Unlock()
 }
 
-// key returns the dedupe key (type + pid).
 func (s *AlertStore) Raise(a Alert) (Alert, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := a.Type
-	if a.PID > 0 {
-		key = a.Type + "/" + uint32ToA(a.PID)
+	key := alertKey(a.Type, a.PID)
+	if until, ok := s.snoozed[key]; ok {
+		if time.Now().Before(until) {
+			return a, false
+		}
+		delete(s.snoozed, key)
 	}
 	if existing, ok := s.active[key]; ok {
 		// Already raised; refresh details but do not return as new.
@@ -131,17 +143,32 @@ func (s *AlertStore) ClearAll() int {
 
 // Clear marks an active alert as cleared.
 func (s *AlertStore) Clear(typeName string, pid uint32) {
+	s.ClearByKey(alertKey(typeName, pid))
+}
+
+// ClearByKey removes a specific active alert by its internal ID.
+func (s *AlertStore) ClearByKey(key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := typeName
-	if pid > 0 {
-		key = typeName + "/" + uint32ToA(pid)
-	}
 	if existing, ok := s.active[key]; ok {
 		now := time.Now()
 		existing.Cleared = &now
 		delete(s.active, key)
 	}
+}
+
+// Snooze suppresses raises for one alert key until `until` and clears any
+// currently active alert for the same key.
+func (s *AlertStore) Snooze(typeName string, pid uint32, until time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := alertKey(typeName, pid)
+	s.snoozed[key] = until
+	if existing, ok := s.active[key]; ok {
+		existing.Cleared = &until
+		delete(s.active, key)
+	}
+	return true
 }
 
 // Active returns a copy of the currently raised alerts.

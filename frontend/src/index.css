@@ -1,0 +1,116 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: var(--background);
+  --color-background-subtle: var(--background-subtle);
+  --color-background-muted: var(--background-muted);
+  --color-surface: var(--surface);
+  --color-foreground: var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-muted: var(--text-muted);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-muted: var(--accent-muted);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
+  --color-info: var(--info);
+  --font-sans: "Inter Variable", "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", monospace;
+}
+
+:root {
+  color-scheme: dark;
+  --background: #131316;
+  --background-subtle: #1a1a1f;
+  --background-muted: #222228;
+  --surface: #2a2a32;
+  --border: #32323c;
+  --border-strong: #45454f;
+  --text-primary: #ededf0;
+  --text-secondary: #a0a0ab;
+  --text-muted: #6e6e7a;
+  --ring: #4f6df5;
+  --accent: #3b82f6;
+  --accent-hover: #5b95f8;
+  --accent-foreground: #ffffff;
+  --accent-muted: rgb(59 130 246 / 0.14);
+  --success: #22c55e;
+  --success-bg: rgb(34 197 94 / 0.12);
+  --warning: #f59e0b;
+  --warning-bg: rgb(245 158 11 / 0.12);
+  --error: #ef4444;
+  --error-bg: rgb(239 68 68 / 0.12);
+  --info: #3b82f6;
+  --info-bg: rgb(59 130 246 / 0.12);
+  --overlay: rgb(17 24 39 / 0.44);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --background: #f8f8fa;
+  --background-subtle: #f0f0f4;
+  --background-muted: #e8e8ee;
+  --surface: #ffffff;
+  --border: #d4d4dc;
+  --border-strong: #b0b0bc;
+  --text-primary: #1a1a22;
+  --text-secondary: #55556a;
+  --text-muted: #8888a0;
+  --ring: #3b5ce4;
+  --accent: #2f6de1;
+  --accent-hover: #245fce;
+  --accent-muted: rgb(47 109 225 / 0.1);
+  --success-bg: rgb(34 197 94 / 0.08);
+  --warning-bg: rgb(245 158 11 / 0.08);
+  --error-bg: rgb(239 68 68 / 0.08);
+  --info-bg: rgb(59 130 246 / 0.08);
+  --overlay: rgb(26 26 34 / 0.22);
+}
+
+@layer base {
+  html {
+    @apply bg-background font-sans text-foreground antialiased;
+  }
+
+  body {
+    @apply min-h-screen bg-background text-foreground transition-colors duration-150;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    @apply min-h-11 transition-colors duration-150;
+  }
+
+  :focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--ring);
+  }
+}
+
+@layer components {
+  .app-shell {
+    @apply min-h-screen bg-background text-foreground;
+  }
+
+  .surface {
+    @apply rounded-2xl border border-border bg-background-subtle p-5 shadow-sm;
+  }
+
+  .page-padding {
+    @apply px-4 sm:px-6 lg:px-8;
+  }
+
+  .stat-grid {
+    @apply grid gap-4 sm:grid-cols-2 xl:grid-cols-4;
+  }
+}

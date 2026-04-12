@@ -130,6 +130,30 @@ func BuildPrompt(language string, snap *metrics.SystemSnapshot, alerts []anomaly
 	return b.String()
 }
 
+// BuildChatPrompt assembles the multi-turn chat prompt using the same
+// snapshot context as Analyze plus a short in-memory conversation window.
+func BuildChatPrompt(language string, snap *metrics.SystemSnapshot, alerts []anomaly.Alert, includeTree, includePorts bool, history []chatTurn, userMessage string) string {
+	var b strings.Builder
+	b.WriteString(BuildPrompt(language, snap, alerts, includeTree, includePorts, ""))
+	if len(history) > 0 {
+		b.WriteString("\n## RECENT CHAT\n")
+		for _, turn := range history {
+			role := "Assistant"
+			if strings.EqualFold(turn.Role, "user") {
+				role = "User"
+			}
+			fmt.Fprintf(&b, "%s: %s\n", role, strings.TrimSpace(turn.Content))
+		}
+	}
+	b.WriteString("\n## CHAT TASK\n")
+	b.WriteString("Continue the conversation naturally. Answer the latest user message directly using the current snapshot.\n")
+	b.WriteString("If the user asks for an action recommendation, keep using the <actions> block format.\n")
+	b.WriteString("\n## LATEST USER MESSAGE\n")
+	b.WriteString(strings.TrimSpace(userMessage))
+	b.WriteByte('\n')
+	return b.String()
+}
+
 // SystemPrompt returns the system prompt for the requested language.
 // Only English is supported; the argument is kept for forward compatibility
 // with older callers that still pass a language hint.

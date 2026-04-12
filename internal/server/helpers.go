@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -68,19 +67,4 @@ func parseUint32Param(w http.ResponseWriter, r *http.Request, name string) (uint
 		return 0, false
 	}
 	return uint32(n), true
-}
-
-// formatBytes converts a byte count into a short human-readable string.
-func formatBytes(n uint64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := uint64(unit), 0
-	for n/div >= unit && exp < 4 {
-		div *= unit
-		exp++
-	}
-	suffixes := []string{"KB", "MB", "GB", "TB", "PB"}
-	return fmt.Sprintf("%.1f %s", float64(n)/float64(div), suffixes[exp])
 }

@@ -131,7 +131,7 @@ func (s *Server) handleRulesUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.RLock()
-	current := *s.cfg
+	current := cloneConfig(s.cfg)
 	s.mu.RUnlock()
 
 	next := current

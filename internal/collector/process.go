@@ -19,9 +19,13 @@ import (
 // procPrev tracks the prior CPU time slice for a single PID so the next
 // sample can compute a percentage.
 type procPrev struct {
-	kernelTicks uint64
-	userTicks   uint64
-	sampleTime  time.Time
+	kernelTicks  uint64
+	userTicks    uint64
+	ioReadBytes  uint64
+	ioWriteBytes uint64
+	ioReadOps    uint64
+	ioWriteOps   uint64
+	sampleTime   time.Time
 }
 
 // ProcessCollector enumerates running processes and computes per-process CPU%.
@@ -114,11 +118,21 @@ func (pc *ProcessCollector) collectOne(entry winapi.PROCESSENTRY32W, now time.Ti
 		info.PageFaults = mem.PageFaultCount
 	}
 
+	var currReadBytes, currWriteBytes, currReadOps, currWriteOps uint64
 	if io, err := winapi.GetProcessIoCounters(h); err == nil && io != nil {
-		info.IOReadBytes = io.ReadTransferCount
-		info.IOWriteBytes = io.WriteTransferCount
-		info.IOReadOps = io.ReadOperationCount
-		info.IOWriteOps = io.WriteOperationCount
+		currReadBytes = io.ReadTransferCount
+		currWriteBytes = io.WriteTransferCount
+		currReadOps = io.ReadOperationCount
+		currWriteOps = io.WriteOperationCount
+		pc.mu.Lock()
+		prev, hasPrev := pc.prev[entry.ProcessID]
+		pc.mu.Unlock()
+		if hasPrev {
+			info.IOReadBytes = saturatingSub(currReadBytes, prev.ioReadBytes)
+			info.IOWriteBytes = saturatingSub(currWriteBytes, prev.ioWriteBytes)
+			info.IOReadOps = saturatingSub(currReadOps, prev.ioReadOps)
+			info.IOWriteOps = saturatingSub(currWriteOps, prev.ioWriteOps)
+		}
 	}
 
 	create, _, kernel, user, terr := winapi.GetProcessTimes(h)
@@ -147,9 +161,13 @@ func (pc *ProcessCollector) collectOne(entry winapi.PROCESSENTRY32W, now time.Ti
 			}
 		}
 		live[entry.ProcessID] = procPrev{
-			kernelTicks: kt,
-			userTicks:   ut,
-			sampleTime:  now,
+			kernelTicks:  kt,
+			userTicks:    ut,
+			ioReadBytes:  currReadBytes,
+			ioWriteBytes: currWriteBytes,
+			ioReadOps:    currReadOps,
+			ioWriteOps:   currWriteOps,
+			sampleTime:   now,
 		}
 	} else {
 		live[entry.ProcessID] = procPrev{sampleTime: now}

@@ -105,13 +105,13 @@ func (d *RulesDetector) Analyze(ctx *AnalysisContext) {
 			}
 			switch action {
 			case "kill":
-				if err := ctx.Actuator.Kill(p.PID, true); err != nil {
+				if err := ctx.Actuator.Kill(p.PID, false); err != nil {
 					log.Printf("rule %q kill PID %d failed: %v", r.Name, p.PID, err)
 				} else {
 					st.lastActionAt = ctx.Now
 				}
 			case "suspend":
-				if err := ctx.Actuator.Suspend(p.PID); err != nil {
+				if err := ctx.Actuator.Suspend(p.PID, false); err != nil {
 					log.Printf("rule %q suspend PID %d failed: %v", r.Name, p.PID, err)
 				} else {
 					st.lastActionAt = ctx.Now

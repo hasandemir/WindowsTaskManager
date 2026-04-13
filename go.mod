@@ -1,8 +1,10 @@
 module github.com/ersinkoc/WindowsTaskManager
 
-go 1.23
+go 1.25.0
+
+toolchain go1.26.2
 
 require (
-	golang.org/x/sys v0.28.0
+	golang.org/x/sys v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
 )

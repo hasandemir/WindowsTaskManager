@@ -32,9 +32,11 @@ type SSEHub struct {
 
 func NewSSEHub(emitter *event.Emitter) *SSEHub {
 	hub := &SSEHub{clients: make(map[uint64]*sseClient)}
-	emitter.Subscribe(func(eventType string, data any) {
-		hub.broadcast(eventType, data)
-	})
+	if emitter != nil {
+		emitter.Subscribe(func(eventType string, data any) {
+			hub.broadcast(eventType, data)
+		})
+	}
 	return hub
 }
 

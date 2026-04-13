@@ -55,7 +55,7 @@ func NewStore(historyCap, procHistoryCap int) *Store {
 func (s *Store) SetLatest(snap *metrics.SystemSnapshot) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.setLatestLocked(snap)
+	s.setLatestLocked(cloneSnapshot(snap))
 	s.recordSnapshotLocked(snap)
 }
 
@@ -111,7 +111,7 @@ func (s *Store) recordSnapshotLocked(snap *metrics.SystemSnapshot) {
 func (s *Store) Latest() *metrics.SystemSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.latest
+	return cloneSnapshot(s.latest)
 }
 
 // SystemHistory returns a copy of the system history ring buffer contents.
@@ -164,4 +164,35 @@ func (s *Store) TrackedProcessCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.procHistory)
+}
+
+func cloneSnapshot(src *metrics.SystemSnapshot) *metrics.SystemSnapshot {
+	if src == nil {
+		return nil
+	}
+	dst := *src
+	dst.CPU.PerCore = append([]float64(nil), src.CPU.PerCore...)
+	dst.Disk.Drives = append([]metrics.DriveInfo(nil), src.Disk.Drives...)
+	dst.Network.Interfaces = append([]metrics.InterfaceInfo(nil), src.Network.Interfaces...)
+	dst.Processes = append([]metrics.ProcessInfo(nil), src.Processes...)
+	dst.PortBindings = append([]metrics.PortBinding(nil), src.PortBindings...)
+	dst.ProcessTree = cloneProcessTree(src.ProcessTree)
+	return &dst
+}
+
+func cloneProcessTree(nodes []*metrics.ProcessNode) []*metrics.ProcessNode {
+	if len(nodes) == 0 {
+		return nil
+	}
+	out := make([]*metrics.ProcessNode, 0, len(nodes))
+	for _, node := range nodes {
+		if node == nil {
+			out = append(out, nil)
+			continue
+		}
+		cp := *node
+		cp.Children = cloneProcessTree(node.Children)
+		out = append(out, &cp)
+	}
+	return out
 }

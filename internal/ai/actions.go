@@ -1,7 +1,7 @@
 package ai
 
 import (
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -110,7 +110,7 @@ func parseActionsBlock(raw string) (string, []Suggestion) {
 // hashSuggestion returns a short stable ID so the UI can dedupe across
 // repeated analyze calls.
 func hashSuggestion(s Suggestion) string {
-	h := sha1.New()
+	h := sha256.New()
 	fmt.Fprintf(h, "%s|%d|%s", s.Type, s.PID, strings.ToLower(s.Name))
 	if s.Rule != nil {
 		fmt.Fprintf(h, "|%s|%s|%v", s.Rule.Name, s.Rule.Match, s.Rule.Threshold)

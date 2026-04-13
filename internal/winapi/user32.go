@@ -4,6 +4,7 @@ package winapi
 
 import (
 	"fmt"
+	"math"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -18,9 +19,12 @@ func DefWindowProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 // RegisterClassEx registers a window class.
 func RegisterClassEx(c *WNDCLASSEXW) (uint16, error) {
 	c.Size = uint32(unsafe.Sizeof(*c))
-	r1, _, e := procRegisterClassExW.Call(uintptr(unsafe.Pointer(c)))
+	r1, _, e := procRegisterClassExW.Call(uintptr(unsafe.Pointer(c))) // #nosec G103 -- Audited Win32 unsafe interop.
 	if r1 == 0 {
 		return 0, fmt.Errorf("RegisterClassExW: %w", e)
+	}
+	if uint64(r1) > math.MaxUint16 {
+		return 0, fmt.Errorf("RegisterClassExW: class id %d overflows uint16", r1)
 	}
 	return uint16(r1), nil
 }
@@ -31,13 +35,13 @@ func CreateWindowEx(exStyle uint32, className, windowName *uint16, style uint32,
 	param unsafe.Pointer) (uintptr, error) {
 	r1, _, e := procCreateWindowExW.Call(
 		uintptr(exStyle),
-		uintptr(unsafe.Pointer(className)),
-		uintptr(unsafe.Pointer(windowName)),
+		uintptr(unsafe.Pointer(className)),  // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(windowName)), // #nosec G103 -- Audited Win32 unsafe interop.
 		uintptr(style),
-		uintptr(x),
-		uintptr(y),
-		uintptr(width),
-		uintptr(height),
+		int32Param(x),
+		int32Param(y),
+		int32Param(width),
+		int32Param(height),
 		parent,
 		menu,
 		instance,
@@ -51,34 +55,45 @@ func CreateWindowEx(exStyle uint32, className, windowName *uint16, style uint32,
 
 // DestroyWindow destroys a window.
 func DestroyWindow(hwnd uintptr) {
-	procDestroyWindow.Call(hwnd)
+	r1, _, _ := procDestroyWindow.Call(hwnd)
+	_ = r1
 }
 
 // GetMessage retrieves a message from the calling thread's queue.
 func GetMessage(msg *MSG, hwnd uintptr) int32 {
-	r1, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(msg)), hwnd, 0, 0)
-	return int32(r1)
+	r1, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(msg)), hwnd, 0, 0) // #nosec G103 -- Audited Win32 unsafe interop.
+	switch r1 {
+	case 0:
+		return 0
+	case ^uintptr(0):
+		return -1
+	default:
+		return 1
+	}
 }
 
 // TranslateMessage translates virtual-key messages.
 func TranslateMessage(msg *MSG) {
-	procTranslateMessage.Call(uintptr(unsafe.Pointer(msg)))
+	r1, _, _ := procTranslateMessage.Call(uintptr(unsafe.Pointer(msg))) // #nosec G103 -- Audited Win32 unsafe interop.
+	_ = r1
 }
 
 // DispatchMessage dispatches a message to a window procedure.
 func DispatchMessage(msg *MSG) uintptr {
-	r1, _, _ := procDispatchMessageW.Call(uintptr(unsafe.Pointer(msg)))
+	r1, _, _ := procDispatchMessageW.Call(uintptr(unsafe.Pointer(msg))) // #nosec G103 -- Audited Win32 unsafe interop.
 	return r1
 }
 
 // PostQuitMessage posts a WM_QUIT message.
 func PostQuitMessage(exitCode int32) {
-	procPostQuitMessage.Call(uintptr(exitCode))
+	r1, _, _ := procPostQuitMessage.Call(int32Param(exitCode))
+	_ = r1
 }
 
 // PostMessage posts a message into the message queue of the specified window.
 func PostMessage(hwnd uintptr, msg uint32, wParam, lParam uintptr) {
-	procPostMessageW.Call(hwnd, uintptr(msg), wParam, lParam)
+	r1, _, _ := procPostMessageW.Call(hwnd, uintptr(msg), wParam, lParam)
+	_ = r1
 }
 
 // CreatePopupMenu creates a popup menu.
@@ -93,7 +108,7 @@ func AppendMenu(menu uintptr, flags, idNewItem uintptr, text string) error {
 	if err != nil {
 		return err
 	}
-	r1, _, e := procAppendMenuW.Call(menu, flags, idNewItem, uintptr(unsafe.Pointer(textPtr)))
+	r1, _, e := procAppendMenuW.Call(menu, flags, idNewItem, uintptr(unsafe.Pointer(textPtr))) // #nosec G103 -- Audited Win32 unsafe interop.
 	if r1 == 0 {
 		return fmt.Errorf("AppendMenuW: %w", e)
 	}
@@ -102,13 +117,14 @@ func AppendMenu(menu uintptr, flags, idNewItem uintptr, text string) error {
 
 // DestroyMenu destroys a menu.
 func DestroyMenu(menu uintptr) {
-	procDestroyMenu.Call(menu)
+	r1, _, _ := procDestroyMenu.Call(menu)
+	_ = r1
 }
 
 // TrackPopupMenu displays a popup menu.
 func TrackPopupMenu(menu uintptr, flags uint32, x, y int32, hwnd uintptr) uintptr {
 	r1, _, _ := procTrackPopupMenu.Call(
-		menu, uintptr(flags), uintptr(x), uintptr(y), 0, hwnd, 0,
+		menu, uintptr(flags), int32Param(x), int32Param(y), 0, hwnd, 0,
 	)
 	return r1
 }
@@ -116,7 +132,7 @@ func TrackPopupMenu(menu uintptr, flags uint32, x, y int32, hwnd uintptr) uintpt
 // GetCursorPos retrieves the cursor position.
 func GetCursorPos() (POINT, error) {
 	var pt POINT
-	r1, _, e := procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
+	r1, _, e := procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt))) // #nosec G103 -- Audited Win32 unsafe interop.
 	if r1 == 0 {
 		return pt, fmt.Errorf("GetCursorPos: %w", e)
 	}
@@ -125,7 +141,8 @@ func GetCursorPos() (POINT, error) {
 
 // SetForegroundWindow brings the specified window to the foreground.
 func SetForegroundWindow(hwnd uintptr) {
-	procSetForegroundWindow.Call(hwnd)
+	r1, _, _ := procSetForegroundWindow.Call(hwnd)
+	_ = r1
 }
 
 // LoadIcon loads a stock icon (e.g., IDI_APPLICATION).
@@ -145,6 +162,11 @@ const (
 	IDI_APPLICATION uintptr = 32512
 	IDC_ARROW       uintptr = 32512
 )
+
+func int32Param(v int32) uintptr {
+	// #nosec G115 -- Win32 APIs consume signed 32-bit values in these fields.
+	return uintptr(uint32(v))
+}
 
 // TPM constants.
 const (

@@ -29,17 +29,35 @@ $Module = "./cmd/wtm"
 Write-Host "==> tidying modules"
 go mod tidy
 
+Write-Host "==> verifying modules"
+go mod verify
+
 Write-Host "==> formatting"
 go fmt ./...
 
+Write-Host "==> testing"
+go test ./... -count=1
+
 Write-Host "==> vet"
 go vet ./...
+
+Write-Host "==> govulncheck"
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 Write-Host "==> deadcode"
 go run golang.org/x/tools/cmd/deadcode@latest ./...
 
 Write-Host "==> unparam"
 go run mvdan.cc/unparam@latest ./...
+
+$gcc = Get-Command gcc -ErrorAction SilentlyContinue
+if ($null -ne $gcc) {
+    Write-Host "==> race"
+    $env:CGO_ENABLED = "1"
+    go test -race ./...
+} else {
+    Write-Host "==> race skipped (gcc not found; install MinGW/MSYS2 to enable go test -race)"
+}
 
 Write-Host "==> building $Out (version $Version)"
 $env:GOOS = "windows"

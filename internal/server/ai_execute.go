@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ersinkoc/WindowsTaskManager/internal/ai"
@@ -18,18 +19,136 @@ type aiExecuteInputError struct {
 
 func (e *aiExecuteInputError) Error() string { return e.message }
 
+type issuedAISuggestion struct {
+	suggestion ai.Suggestion
+	expiresAt  time.Time
+}
+
+type aiSuggestionStore struct {
+	mu    sync.Mutex
+	ttl   time.Duration
+	items map[string]issuedAISuggestion
+}
+
+func newAISuggestionStore(ttl time.Duration) *aiSuggestionStore {
+	return &aiSuggestionStore{
+		ttl:   ttl,
+		items: make(map[string]issuedAISuggestion),
+	}
+}
+
+func (s *aiSuggestionStore) remember(items []ai.Suggestion) {
+	if s == nil || len(items) == 0 {
+		return
+	}
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneLocked(now)
+	for _, item := range items {
+		id := strings.TrimSpace(item.ID)
+		if id == "" {
+			continue
+		}
+		s.items[id] = issuedAISuggestion{
+			suggestion: cloneAISuggestion(item),
+			expiresAt:  now.Add(s.ttl),
+		}
+	}
+}
+
+func (s *aiSuggestionStore) consume(expected ai.Suggestion) error {
+	if s == nil {
+		return nil
+	}
+	id := strings.TrimSpace(expected.ID)
+	if id == "" {
+		return &aiExecuteInputError{message: "suggestion id required"}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	s.pruneLocked(now)
+	issued, ok := s.items[id]
+	if !ok {
+		return &aiExecuteInputError{message: "suggestion not found or expired"}
+	}
+	if !sameAISuggestion(issued.suggestion, expected) {
+		return &aiExecuteInputError{message: "suggestion payload mismatch"}
+	}
+	delete(s.items, id)
+	return nil
+}
+
+func (s *aiSuggestionStore) pruneLocked(now time.Time) {
+	for id, item := range s.items {
+		if !item.expiresAt.After(now) {
+			delete(s.items, id)
+		}
+	}
+}
+
+func cloneAISuggestion(in ai.Suggestion) ai.Suggestion {
+	out := in
+	if in.Rule != nil {
+		rule := *in.Rule
+		out.Rule = &rule
+	}
+	if in.Policy != nil {
+		policy := *in.Policy
+		out.Policy = &policy
+	}
+	return out
+}
+
+func sameAISuggestion(left, right ai.Suggestion) bool {
+	if strings.TrimSpace(left.ID) != strings.TrimSpace(right.ID) {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(left.Type), strings.TrimSpace(right.Type)) == false {
+		return false
+	}
+	if left.PID != right.PID {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(left.Name), strings.TrimSpace(right.Name)) {
+		return false
+	}
+	return sameRuleSuggestion(left.Rule, right.Rule)
+}
+
+func sameRuleSuggestion(left, right *ai.RuleSuggestion) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Name == right.Name &&
+		left.Enabled == right.Enabled &&
+		left.Match == right.Match &&
+		left.Metric == right.Metric &&
+		left.Op == right.Op &&
+		left.Threshold == right.Threshold &&
+		left.For == right.For &&
+		left.ForSeconds == right.ForSeconds &&
+		left.Action == right.Action &&
+		left.Cooldown == right.Cooldown &&
+		left.CooldownSeconds == right.CooldownSeconds
+}
+
 // aiExecuteRequest is the body of POST /api/v1/ai/execute. The dashboard
 // posts the full Suggestion object from the AI advisor verbatim, so this
 // struct mirrors Suggestion (including the opaque ID) rather than pruning
 // fields — readJSON uses DisallowUnknownFields and would 400 otherwise.
 type aiExecuteRequest struct {
-	ID     string             `json:"id,omitempty"`   // opaque — ignored server-side, used for UI dedup
-	Type   string             `json:"type"`           // kill | suspend | protect | ignore | add_rule
-	PID    uint32             `json:"pid,omitempty"`  // required for kill/suspend
-	Name   string             `json:"name,omitempty"` // required for protect/ignore
-	Rule   *ai.RuleSuggestion `json:"rule,omitempty"` // required for add_rule
-	Reason string             `json:"reason,omitempty"`
-	Policy *ai.AutoPolicy     `json:"policy,omitempty"` // ignored server-side; used by UI for dry-run labels
+	ID      string             `json:"id,omitempty"` // opaque; used for UI dedup
+	Type    string             `json:"type"`         // kill | suspend | protect | ignore | add_rule
+	PID     uint32             `json:"pid,omitempty"`
+	Confirm bool               `json:"confirm,omitempty"`
+	Name    string             `json:"name,omitempty"`
+	Rule    *ai.RuleSuggestion `json:"rule,omitempty"`
+	Reason  string             `json:"reason,omitempty"`
+	Policy  *ai.AutoPolicy     `json:"policy,omitempty"` // ignored server-side; used by UI for dry-run labels
 }
 
 // aiRuleToConfig validates and converts the LLM-emitted rule wire shape into
@@ -112,7 +231,11 @@ func (s *Server) handleAIExecute(w http.ResponseWriter, r *http.Request) {
 		Rule:   body.Rule,
 		Policy: body.Policy,
 	}
-	if err := s.ExecuteAISuggestion(suggestion); err != nil {
+	if err := s.consumeAISuggestion(suggestion); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if err := s.ExecuteAISuggestion(suggestion, body.Confirm); err != nil {
 		var inputErr *aiExecuteInputError
 		switch {
 		case errors.As(err, &inputErr):
@@ -131,18 +254,32 @@ func (s *Server) handleAIExecute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "type": suggestion.Type, "pid": suggestion.PID, "name": suggestion.Name})
 }
 
-func (s *Server) ExecuteAISuggestion(suggestion ai.Suggestion) error {
+func (s *Server) rememberAISuggestions(items []ai.Suggestion) {
+	if s == nil || s.aiExec == nil {
+		return
+	}
+	s.aiExec.remember(items)
+}
+
+func (s *Server) consumeAISuggestion(item ai.Suggestion) error {
+	if s == nil || s.aiExec == nil {
+		return nil
+	}
+	return s.aiExec.consume(item)
+}
+
+func (s *Server) ExecuteAISuggestion(suggestion ai.Suggestion, confirm bool) error {
 	switch strings.ToLower(strings.TrimSpace(suggestion.Type)) {
 	case "kill":
 		if suggestion.PID == 0 {
 			return &aiExecuteInputError{message: "pid required"}
 		}
-		return s.controller.Kill(suggestion.PID, true)
+		return s.controller.Kill(suggestion.PID, confirm)
 	case "suspend":
 		if suggestion.PID == 0 {
 			return &aiExecuteInputError{message: "pid required"}
 		}
-		return s.controller.Suspend(suggestion.PID)
+		return s.controller.Suspend(suggestion.PID, confirm)
 	case "protect":
 		if strings.TrimSpace(suggestion.Name) == "" {
 			return &aiExecuteInputError{message: "name required"}

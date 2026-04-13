@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -186,6 +187,60 @@ func TestAIChatRouteSmoke(t *testing.T) {
 	}
 	if body["answer"] != "Spike came from node.exe." {
 		t.Fatalf("answer=%v", body["answer"])
+	}
+}
+
+func TestAIChatRouteSanitizesProviderErrors(t *testing.T) {
+	s, _ := newTestServer(t, "", config.DefaultConfig())
+	s.advisor = chatStubAdvisor{
+		enabled: true,
+		chatFn: func(string) (string, error) {
+			return "", context.DeadlineExceeded
+		},
+	}
+
+	req := authedJSONRequest(http.MethodPost, "/api/v1/ai/chat", []byte(`{"message":"hello"}`), s.csrfToken)
+	rr := httptest.NewRecorder()
+	s.router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var payload map[string]map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := payload["error"]["message"]
+	if got != "AI provider request failed" {
+		t.Fatalf("message=%q want generic provider failure", got)
+	}
+}
+
+func TestConfigGetRedactsAIExtraHeaders(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.AI.ExtraHeaders = map[string]string{
+		"Authorization": "Bearer my-secret",
+		"X-Title":       "WTM",
+	}
+	s, _ := newTestServer(t, "", cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Host = "127.0.0.1:19876"
+	rr := httptest.NewRecorder()
+	s.router.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got config.Config
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.HasPrefix(got.AI.ExtraHeaders["Authorization"], "****") {
+		t.Fatalf("authorization header not redacted: %q", got.AI.ExtraHeaders["Authorization"])
+	}
+	if got.AI.ExtraHeaders["X-Title"] != "WTM" {
+		t.Fatalf("non-sensitive header mutated: %q", got.AI.ExtraHeaders["X-Title"])
 	}
 }
 

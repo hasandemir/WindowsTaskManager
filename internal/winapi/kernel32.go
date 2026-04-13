@@ -4,6 +4,7 @@ package winapi
 
 import (
 	"fmt"
+	"math"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -12,9 +13,9 @@ import (
 // GetSystemTimes retrieves system idle/kernel/user FILETIMEs.
 func GetSystemTimes() (idle, kernel, user FILETIME, err error) {
 	r1, _, e := procGetSystemTimes.Call(
-		uintptr(unsafe.Pointer(&idle)),
-		uintptr(unsafe.Pointer(&kernel)),
-		uintptr(unsafe.Pointer(&user)),
+		uintptr(unsafe.Pointer(&idle)),   // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&kernel)), // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&user)),   // #nosec G103 -- Audited Win32 unsafe interop.
 	)
 	if r1 == 0 {
 		return idle, kernel, user, fmt.Errorf("GetSystemTimes: %w", e)
@@ -26,7 +27,7 @@ func GetSystemTimes() (idle, kernel, user FILETIME, err error) {
 func GlobalMemoryStatusEx() (*MEMORYSTATUSEX, error) {
 	var ms MEMORYSTATUSEX
 	ms.Length = uint32(unsafe.Sizeof(ms))
-	r1, _, e := procGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&ms)))
+	r1, _, e := procGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&ms))) // #nosec G103 -- Audited Win32 unsafe interop.
 	if r1 == 0 {
 		return nil, fmt.Errorf("GlobalMemoryStatusEx: %w", e)
 	}
@@ -45,7 +46,7 @@ func CreateToolhelp32Snapshot(flags, pid uint32) (windows.Handle, error) {
 // Process32First retrieves the first process entry from a snapshot.
 func Process32First(snap windows.Handle, entry *PROCESSENTRY32W) error {
 	entry.Size = uint32(unsafe.Sizeof(*entry))
-	r1, _, e := procProcess32FirstW.Call(uintptr(snap), uintptr(unsafe.Pointer(entry)))
+	r1, _, e := procProcess32FirstW.Call(uintptr(snap), uintptr(unsafe.Pointer(entry))) // #nosec G103 -- Audited Win32 unsafe interop.
 	if r1 == 0 {
 		return e
 	}
@@ -55,7 +56,7 @@ func Process32First(snap windows.Handle, entry *PROCESSENTRY32W) error {
 // Process32Next retrieves the next process entry.
 func Process32Next(snap windows.Handle, entry *PROCESSENTRY32W) error {
 	entry.Size = uint32(unsafe.Sizeof(*entry))
-	r1, _, e := procProcess32NextW.Call(uintptr(snap), uintptr(unsafe.Pointer(entry)))
+	r1, _, e := procProcess32NextW.Call(uintptr(snap), uintptr(unsafe.Pointer(entry))) // #nosec G103 -- Audited Win32 unsafe interop.
 	if r1 == 0 {
 		return e
 	}
@@ -65,7 +66,7 @@ func Process32Next(snap windows.Handle, entry *PROCESSENTRY32W) error {
 // Thread32First retrieves the first thread from a snapshot.
 func Thread32First(snap windows.Handle, te *THREADENTRY32) error {
 	te.Size = uint32(unsafe.Sizeof(*te))
-	r1, _, e := procThread32First.Call(uintptr(snap), uintptr(unsafe.Pointer(te)))
+	r1, _, e := procThread32First.Call(uintptr(snap), uintptr(unsafe.Pointer(te))) // #nosec G103 -- Audited Win32 unsafe interop.
 	if r1 == 0 {
 		return e
 	}
@@ -75,7 +76,7 @@ func Thread32First(snap windows.Handle, te *THREADENTRY32) error {
 // Thread32Next retrieves the next thread.
 func Thread32Next(snap windows.Handle, te *THREADENTRY32) error {
 	te.Size = uint32(unsafe.Sizeof(*te))
-	r1, _, e := procThread32Next.Call(uintptr(snap), uintptr(unsafe.Pointer(te)))
+	r1, _, e := procThread32Next.Call(uintptr(snap), uintptr(unsafe.Pointer(te))) // #nosec G103 -- Audited Win32 unsafe interop.
 	if r1 == 0 {
 		return e
 	}
@@ -103,7 +104,8 @@ func OpenThreadHandle(access uint32, threadID uint32) (windows.Handle, error) {
 // CloseHandleSafe closes a Windows handle ignoring errors.
 func CloseHandleSafe(h windows.Handle) {
 	if h != 0 {
-		procCloseHandle.Call(uintptr(h))
+		r1, _, _ := procCloseHandle.Call(uintptr(h))
+		_ = r1 // best-effort cleanup for shutdown paths
 	}
 }
 
@@ -120,10 +122,10 @@ func TerminateProcessHandle(h windows.Handle, exitCode uint32) error {
 func GetProcessTimes(h windows.Handle) (creation, exit, kernel, user FILETIME, err error) {
 	r1, _, e := procGetProcessTimes.Call(
 		uintptr(h),
-		uintptr(unsafe.Pointer(&creation)),
-		uintptr(unsafe.Pointer(&exit)),
-		uintptr(unsafe.Pointer(&kernel)),
-		uintptr(unsafe.Pointer(&user)),
+		uintptr(unsafe.Pointer(&creation)), // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&exit)),     // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&kernel)),   // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&user)),     // #nosec G103 -- Audited Win32 unsafe interop.
 	)
 	if r1 == 0 {
 		err = fmt.Errorf("GetProcessTimes: %w", e)
@@ -134,7 +136,7 @@ func GetProcessTimes(h windows.Handle) (creation, exit, kernel, user FILETIME, e
 // GetProcessIoCounters retrieves a process's I/O counters.
 func GetProcessIoCounters(h windows.Handle) (*IO_COUNTERS, error) {
 	var ic IO_COUNTERS
-	r1, _, e := procGetProcessIoCounters.Call(uintptr(h), uintptr(unsafe.Pointer(&ic)))
+	r1, _, e := procGetProcessIoCounters.Call(uintptr(h), uintptr(unsafe.Pointer(&ic))) // #nosec G103 -- Audited Win32 unsafe interop.
 	if r1 == 0 {
 		return nil, fmt.Errorf("GetProcessIoCounters: %w", e)
 	}
@@ -148,8 +150,8 @@ func QueryFullProcessImageName(h windows.Handle) (string, error) {
 	r1, _, e := procQueryFullProcessImageNameW.Call(
 		uintptr(h),
 		0,
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(unsafe.Pointer(&size)),
+		uintptr(unsafe.Pointer(&buf[0])), // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&size)),   // #nosec G103 -- Audited Win32 unsafe interop.
 	)
 	if r1 == 0 {
 		return "", fmt.Errorf("QueryFullProcessImageNameW: %w", e)
@@ -160,7 +162,7 @@ func QueryFullProcessImageName(h windows.Handle) (string, error) {
 // IsProcessCritical reports whether a process is marked critical.
 func IsProcessCritical(h windows.Handle) (bool, error) {
 	var critical int32
-	r1, _, e := procIsProcessCritical.Call(uintptr(h), uintptr(unsafe.Pointer(&critical)))
+	r1, _, e := procIsProcessCritical.Call(uintptr(h), uintptr(unsafe.Pointer(&critical))) // #nosec G103 -- Audited Win32 unsafe interop.
 	if r1 == 0 {
 		return false, fmt.Errorf("IsProcessCritical: %w", e)
 	}
@@ -182,7 +184,7 @@ func GetPriorityClass(h windows.Handle) (uint32, error) {
 	if r1 == 0 {
 		return 0, fmt.Errorf("GetPriorityClass: %w", e)
 	}
-	return uint32(r1), nil
+	return uintptrToUint32(r1, "GetPriorityClass")
 }
 
 // SetProcessAffinityMask sets a process affinity mask.
@@ -232,7 +234,7 @@ func SuspendThread(h windows.Handle) (uint32, error) {
 	if r1 == ^uintptr(0) {
 		return 0, fmt.Errorf("SuspendThread: %w", e)
 	}
-	return uint32(r1), nil
+	return uintptrToUint32(r1, "SuspendThread")
 }
 
 // ResumeThread resumes a thread; returns previous suspend count.
@@ -241,7 +243,7 @@ func ResumeThread(h windows.Handle) (uint32, error) {
 	if r1 == ^uintptr(0) {
 		return 0, fmt.Errorf("ResumeThread: %w", e)
 	}
-	return uint32(r1), nil
+	return uintptrToUint32(r1, "ResumeThread")
 }
 
 // GetDiskFreeSpaceEx retrieves available, total, and free space on a drive.
@@ -252,10 +254,10 @@ func GetDiskFreeSpaceEx(path string) (freeAvail, totalBytes, totalFree uint64, e
 		return
 	}
 	r1, _, callErr := procGetDiskFreeSpaceExW.Call(
-		uintptr(unsafe.Pointer(pathPtr)),
-		uintptr(unsafe.Pointer(&freeAvail)),
-		uintptr(unsafe.Pointer(&totalBytes)),
-		uintptr(unsafe.Pointer(&totalFree)),
+		uintptr(unsafe.Pointer(pathPtr)),     // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&freeAvail)),  // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&totalBytes)), // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&totalFree)),  // #nosec G103 -- Audited Win32 unsafe interop.
 	)
 	if r1 == 0 {
 		err = fmt.Errorf("GetDiskFreeSpaceExW: %w", callErr)
@@ -268,14 +270,21 @@ func GetLogicalDriveStrings() ([]string, error) {
 	var buf [256]uint16
 	r1, _, e := procGetLogicalDriveStringsW.Call(
 		uintptr(len(buf)),
-		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(unsafe.Pointer(&buf[0])), // #nosec G103 -- Audited Win32 unsafe interop.
 	)
 	if r1 == 0 {
 		return nil, fmt.Errorf("GetLogicalDriveStringsW: %w", e)
 	}
+	limit, err := uintptrToInt(r1, "GetLogicalDriveStringsW")
+	if err != nil {
+		return nil, err
+	}
+	if limit > len(buf) {
+		limit = len(buf)
+	}
 	var result []string
 	start := 0
-	for i := 0; i < int(r1); i++ {
+	for i := 0; i < limit; i++ {
 		if buf[i] == 0 {
 			if i > start {
 				result = append(result, windows.UTF16ToString(buf[start:i]))
@@ -292,8 +301,12 @@ func GetDriveType(root string) uint32 {
 	if err != nil {
 		return DRIVE_UNKNOWN
 	}
-	r1, _, _ := procGetDriveTypeW.Call(uintptr(unsafe.Pointer(rootPtr)))
-	return uint32(r1)
+	r1, _, _ := procGetDriveTypeW.Call(uintptr(unsafe.Pointer(rootPtr))) // #nosec G103 -- Audited Win32 unsafe interop.
+	out, convErr := uintptrToUint32(r1, "GetDriveTypeW")
+	if convErr != nil {
+		return DRIVE_UNKNOWN
+	}
+	return out
 }
 
 // GetVolumeInformation retrieves a drive's volume name and filesystem.
@@ -306,17 +319,31 @@ func GetVolumeInformation(root string) (label, fsName string) {
 	var fsBuf [261]uint16
 	var serial, maxLen, flags uint32
 	r1, _, _ := procGetVolumeInformationW.Call(
-		uintptr(unsafe.Pointer(rootPtr)),
-		uintptr(unsafe.Pointer(&labelBuf[0])),
+		uintptr(unsafe.Pointer(rootPtr)),      // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&labelBuf[0])), // #nosec G103 -- Audited Win32 unsafe interop.
 		uintptr(len(labelBuf)),
-		uintptr(unsafe.Pointer(&serial)),
-		uintptr(unsafe.Pointer(&maxLen)),
-		uintptr(unsafe.Pointer(&flags)),
-		uintptr(unsafe.Pointer(&fsBuf[0])),
+		uintptr(unsafe.Pointer(&serial)),   // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&maxLen)),   // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&flags)),    // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&fsBuf[0])), // #nosec G103 -- Audited Win32 unsafe interop.
 		uintptr(len(fsBuf)),
 	)
 	if r1 == 0 {
 		return "", ""
 	}
 	return windows.UTF16ToString(labelBuf[:]), windows.UTF16ToString(fsBuf[:])
+}
+
+func uintptrToUint32(v uintptr, op string) (uint32, error) {
+	if uint64(v) > math.MaxUint32 {
+		return 0, fmt.Errorf("%s: value %d overflows uint32", op, v)
+	}
+	return uint32(v), nil
+}
+
+func uintptrToInt(v uintptr, op string) (int, error) {
+	if uint64(v) > uint64(math.MaxInt) {
+		return 0, fmt.Errorf("%s: value %d overflows int", op, v)
+	}
+	return int(v), nil
 }

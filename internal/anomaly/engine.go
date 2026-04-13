@@ -2,6 +2,8 @@ package anomaly
 
 import (
 	"context"
+	"log"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -28,7 +30,7 @@ type Detector interface {
 // controller dependency tree (it imports winapi which is Windows-only).
 type ProcessActuator interface {
 	Kill(pid uint32, confirm bool) error
-	Suspend(pid uint32) error
+	Suspend(pid uint32, confirm bool) error
 }
 
 // AnalysisContext bundles the inputs each detector needs.
@@ -130,7 +132,11 @@ func (e *Engine) analyzeOnce() {
 }
 
 func safeAnalyze(d Detector, actx *AnalysisContext) {
-	defer func() { _ = recover() }()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("anomaly detector %q panicked: %v\n%s", d.Name(), r, debug.Stack())
+		}
+	}()
 	d.Analyze(actx)
 }
 

@@ -15,6 +15,7 @@ import (
 // document that we proxy + cache so the dashboard doesn't have to deal
 // with CORS or constantly hammer it.
 const modelsDevURL = "https://models.dev/api.json"
+const maxModelsCatalogBytes = 2 << 20
 
 // modelInfo is the trimmed shape we hand to the dashboard. Anything we don't
 // need (cost matrix, modalities, knowledge cutoff) is dropped.
@@ -42,23 +43,32 @@ type modelsCache struct {
 	client    *http.Client
 }
 
+type modelsSnapshot struct {
+	data     []modelInfo
+	loadedAt time.Time
+	lastErr  string
+}
+
 var sharedModelsCache = &modelsCache{
 	ttl:    30 * time.Minute,
 	client: &http.Client{Timeout: 15 * time.Second},
 }
 
-func (c *modelsCache) get() ([]modelInfo, string) {
+func (c *modelsCache) get() modelsSnapshot {
 	c.mu.Lock()
 	fresh := time.Since(c.loadedAt) < c.ttl && len(c.data) > 0
 	stale := !fresh
-	data := c.data
-	lastErr := c.lastError
+	snap := modelsSnapshot{
+		data:     append([]modelInfo(nil), c.data...),
+		loadedAt: c.loadedAt,
+		lastErr:  c.lastError,
+	}
 	if stale && !c.inFlight {
 		c.inFlight = true
 		go c.refresh()
 	}
 	c.mu.Unlock()
-	return data, lastErr
+	return snap
 }
 
 func (c *modelsCache) refresh() {
@@ -85,9 +95,13 @@ func (c *modelsCache) refresh() {
 		c.setError(fmt.Errorf("models.dev: status %d", resp.StatusCode))
 		return
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxModelsCatalogBytes+1))
 	if err != nil {
 		c.setError(err)
+		return
+	}
+	if len(body) > maxModelsCatalogBytes {
+		c.setError(fmt.Errorf("models.dev response exceeds %d bytes", maxModelsCatalogBytes))
 		return
 	}
 
@@ -216,7 +230,8 @@ func normalizedEndpoint(api, format string) string {
 }
 
 func (s *Server) handleAIModels(w http.ResponseWriter, r *http.Request) {
-	data, lastErr := sharedModelsCache.get()
+	snap := sharedModelsCache.get()
+	data := snap.data
 	q := strings.ToLower(r.URL.Query().Get("provider"))
 	if q != "" {
 		filtered := make([]modelInfo, 0, len(data)/4)
@@ -233,12 +248,12 @@ func (s *Server) handleAIModels(w http.ResponseWriter, r *http.Request) {
 		"models":  data,
 		"count":   len(data),
 		"source":  modelsDevURL,
-		"updated": sharedModelsCache.loadedAt.Format(time.RFC3339),
+		"updated": snap.loadedAt.Format(time.RFC3339),
 	}
-	if lastErr != "" {
-		resp["error"] = lastErr
+	if snap.lastErr != "" {
+		resp["error"] = snap.lastErr
 	}
-	if len(data) == 0 && lastErr == "" {
+	if len(data) == 0 && snap.lastErr == "" {
 		// Cold start: refresh hasn't completed yet. Tell the client to retry.
 		w.Header().Set("Retry-After", "2")
 	}

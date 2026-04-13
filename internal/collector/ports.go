@@ -3,7 +3,6 @@
 package collector
 
 import (
-	"encoding/binary"
 	"fmt"
 	"net"
 	"sync"
@@ -121,7 +120,7 @@ func (pc *PortCollector) finalize(pb *metrics.PortBinding, resolveName func(pid 
 	if label, ok := pc.wellKnownPorts[pb.LocalPort]; ok {
 		pb.Label = label
 	}
-	key := fmt.Sprintf("%s|%s:%d|%s:%d|%s", pb.Protocol, pb.LocalAddr, pb.LocalPort, pb.RemoteAddr, pb.RemotePort, pb.State)
+	key := fmt.Sprintf("%d|%s|%s:%d|%s:%d|%s", pb.PID, pb.Protocol, pb.LocalAddr, pb.LocalPort, pb.RemoteAddr, pb.RemotePort, pb.State)
 	if first, ok := pc.since[key]; ok {
 		pb.Since = first
 	} else {
@@ -135,17 +134,21 @@ func (pc *PortCollector) finalize(pb *metrics.PortBinding, resolveName func(pid 
 // portFromMib swaps the network-byte-order port stored in the low 16 bits
 // of a MIB row's Port field.
 func portFromMib(p uint32) uint16 {
-	// Win32 stores ports in network byte order in the high byte of low word.
-	b := []byte{byte(p), byte(p >> 8)}
-	return binary.BigEndian.Uint16(b)
+	// Win32 stores ports in network byte order in the low 16 bits.
+	swapped := ((p & 0xFF) << 8) | ((p >> 8) & 0xFF)
+	// #nosec G115 -- swapped is explicitly masked to a 16-bit value.
+	return uint16(swapped)
 }
 
 func ipv4String(addr uint32) string {
-	a := byte(addr)
-	b := byte(addr >> 8)
-	c := byte(addr >> 16)
-	d := byte(addr >> 24)
-	return net.IPv4(a, b, c, d).String()
+	// MIB rows store IPv4 in little-endian DWORD form.
+	return fmt.Sprintf(
+		"%d.%d.%d.%d",
+		addr&0xFF,
+		(addr>>8)&0xFF,
+		(addr>>16)&0xFF,
+		(addr>>24)&0xFF,
+	)
 }
 
 func ipv6String(addr [16]byte) string {

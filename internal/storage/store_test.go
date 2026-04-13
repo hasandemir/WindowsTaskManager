@@ -41,3 +41,66 @@ func TestUpdateLatestDoesNotAppendHistory(t *testing.T) {
 		t.Fatalf("port bindings len=%d want 1", len(latest.PortBindings))
 	}
 }
+
+func TestLatestReturnsDetachedClone(t *testing.T) {
+	store := NewStore(60, 10)
+	ts := time.Unix(1710001000, 0)
+	original := &metrics.SystemSnapshot{
+		Timestamp: ts,
+		CPU: metrics.CPUMetrics{
+			TotalPercent: 20,
+			PerCore:      []float64{10, 30},
+		},
+		Disk: metrics.DiskMetrics{
+			Drives: []metrics.DriveInfo{{Letter: "C:", UsedPct: 42}},
+		},
+		Network: metrics.NetworkMetrics{
+			Interfaces: []metrics.InterfaceInfo{{Name: "Ethernet", InBPS: 100}},
+		},
+		Processes: []metrics.ProcessInfo{
+			{PID: 7, Name: "agent.exe", CPUPercent: 8.5},
+		},
+		ProcessTree: []*metrics.ProcessNode{{
+			Process: metrics.ProcessInfo{PID: 7, Name: "agent.exe"},
+			Children: []*metrics.ProcessNode{{
+				Process: metrics.ProcessInfo{PID: 8, Name: "worker.exe"},
+			}},
+		}},
+		PortBindings: []metrics.PortBinding{{PID: 7, Process: "agent.exe", LocalPort: 9000}},
+	}
+
+	store.SetLatest(original)
+
+	original.Processes[0].Name = "mutated.exe"
+	original.ProcessTree[0].Children[0].Process.Name = "mutated-child.exe"
+	original.PortBindings[0].Process = "mutated.exe"
+
+	latestA := store.Latest()
+	if latestA == nil {
+		t.Fatal("latest snapshot is nil")
+	}
+	if latestA.Processes[0].Name != "agent.exe" {
+		t.Fatalf("stored process name=%q want agent.exe", latestA.Processes[0].Name)
+	}
+	if latestA.ProcessTree[0].Children[0].Process.Name != "worker.exe" {
+		t.Fatalf("stored child name=%q want worker.exe", latestA.ProcessTree[0].Children[0].Process.Name)
+	}
+	if latestA.PortBindings[0].Process != "agent.exe" {
+		t.Fatalf("stored binding process=%q want agent.exe", latestA.PortBindings[0].Process)
+	}
+
+	latestA.Processes[0].Name = "client-side-mutation.exe"
+	latestA.CPU.PerCore[0] = 999
+	latestA.ProcessTree[0].Process.Name = "changed-tree.exe"
+
+	latestB := store.Latest()
+	if latestB.Processes[0].Name != "agent.exe" {
+		t.Fatalf("latest process name=%q want agent.exe", latestB.Processes[0].Name)
+	}
+	if latestB.CPU.PerCore[0] != 10 {
+		t.Fatalf("latest per-core[0]=%v want 10", latestB.CPU.PerCore[0])
+	}
+	if latestB.ProcessTree[0].Process.Name != "agent.exe" {
+		t.Fatalf("latest tree root=%q want agent.exe", latestB.ProcessTree[0].Process.Name)
+	}
+}

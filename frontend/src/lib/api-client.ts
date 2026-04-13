@@ -226,7 +226,7 @@ export function useAIAnalyzeMutation() {
 
 export function useAIExecuteMutation() {
   return useMutation({
-    mutationFn: (suggestion: AISuggestion) => apiPost<AISuggestion, { ok: boolean }>("/ai/execute", suggestion),
+    mutationFn: (suggestion: AISuggestion) => apiPost("/ai/execute", { ...suggestion, confirm: true } as AISuggestion & { confirm: boolean }),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["system"] }),

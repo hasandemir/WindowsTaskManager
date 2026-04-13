@@ -23,10 +23,10 @@ func RegReadString(rootKey uintptr, subKey, value string) (string, error) {
 	var hKey uintptr
 	r1, _, e := procRegOpenKeyExW.Call(
 		rootKey,
-		uintptr(unsafe.Pointer(subPtr)),
+		uintptr(unsafe.Pointer(subPtr)), // #nosec G103 -- Audited Win32 unsafe interop.
 		0,
 		KEY_READ,
-		uintptr(unsafe.Pointer(&hKey)),
+		uintptr(unsafe.Pointer(&hKey)), // #nosec G103 -- Audited Win32 unsafe interop.
 	)
 	if r1 != 0 {
 		return "", e
@@ -43,11 +43,11 @@ func RegReadString(rootKey uintptr, subKey, value string) (string, error) {
 	buf := make([]uint16, bufSize/2)
 	r1, _, e = procRegQueryValueExW.Call(
 		hKey,
-		uintptr(unsafe.Pointer(valPtr)),
+		uintptr(unsafe.Pointer(valPtr)), // #nosec G103 -- Audited Win32 unsafe interop.
 		0,
-		uintptr(unsafe.Pointer(&bufType)),
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(unsafe.Pointer(&bufSize)),
+		uintptr(unsafe.Pointer(&bufType)), // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&buf[0])),  // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&bufSize)), // #nosec G103 -- Audited Win32 unsafe interop.
 	)
 	if r1 != 0 {
 		return "", e
@@ -64,10 +64,10 @@ func RegReadDWORD(rootKey uintptr, subKey, value string) (uint32, error) {
 	var hKey uintptr
 	r1, _, e := procRegOpenKeyExW.Call(
 		rootKey,
-		uintptr(unsafe.Pointer(subPtr)),
+		uintptr(unsafe.Pointer(subPtr)), // #nosec G103 -- Audited Win32 unsafe interop.
 		0,
 		KEY_READ,
-		uintptr(unsafe.Pointer(&hKey)),
+		uintptr(unsafe.Pointer(&hKey)), // #nosec G103 -- Audited Win32 unsafe interop.
 	)
 	if r1 != 0 {
 		return 0, e
@@ -84,11 +84,11 @@ func RegReadDWORD(rootKey uintptr, subKey, value string) (uint32, error) {
 	var bufSize uint32 = 4
 	r1, _, e = procRegQueryValueExW.Call(
 		hKey,
-		uintptr(unsafe.Pointer(valPtr)),
+		uintptr(unsafe.Pointer(valPtr)), // #nosec G103 -- Audited Win32 unsafe interop.
 		0,
-		uintptr(unsafe.Pointer(&bufType)),
-		uintptr(unsafe.Pointer(&data)),
-		uintptr(unsafe.Pointer(&bufSize)),
+		uintptr(unsafe.Pointer(&bufType)), // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&data)),    // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&bufSize)), // #nosec G103 -- Audited Win32 unsafe interop.
 	)
 	if r1 != 0 {
 		return 0, e
@@ -105,10 +105,10 @@ func RegReadQWORD(rootKey uintptr, subKey, value string) (uint64, error) {
 	var hKey uintptr
 	r1, _, e := procRegOpenKeyExW.Call(
 		rootKey,
-		uintptr(unsafe.Pointer(subPtr)),
+		uintptr(unsafe.Pointer(subPtr)), // #nosec G103 -- Audited Win32 unsafe interop.
 		0,
 		KEY_READ,
-		uintptr(unsafe.Pointer(&hKey)),
+		uintptr(unsafe.Pointer(&hKey)), // #nosec G103 -- Audited Win32 unsafe interop.
 	)
 	if r1 != 0 {
 		return 0, e
@@ -125,11 +125,11 @@ func RegReadQWORD(rootKey uintptr, subKey, value string) (uint64, error) {
 	var bufSize uint32 = 8
 	r1, _, e = procRegQueryValueExW.Call(
 		hKey,
-		uintptr(unsafe.Pointer(valPtr)),
+		uintptr(unsafe.Pointer(valPtr)), // #nosec G103 -- Audited Win32 unsafe interop.
 		0,
-		uintptr(unsafe.Pointer(&bufType)),
-		uintptr(unsafe.Pointer(&data)),
-		uintptr(unsafe.Pointer(&bufSize)),
+		uintptr(unsafe.Pointer(&bufType)), // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&data)),    // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&bufSize)), // #nosec G103 -- Audited Win32 unsafe interop.
 	)
 	if r1 != 0 {
 		return 0, e

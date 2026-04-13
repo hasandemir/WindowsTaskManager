@@ -28,7 +28,7 @@ import (
 
 type processController interface {
 	Kill(pid uint32, confirm bool) error
-	Suspend(pid uint32) error
+	Suspend(pid uint32, confirm bool) error
 	Resume(pid uint32) error
 }
 
@@ -51,6 +51,7 @@ type Bot struct {
 	offset    int64
 	lastToken string
 	pending   map[string]pendingAction
+	rootCtx   context.Context
 }
 
 type pendingAction struct {
@@ -60,6 +61,10 @@ type pendingAction struct {
 	ExpiresAt   time.Time
 	Run         func() error
 }
+
+const maxTelegramResponseBytes = 1 << 20
+
+var newConfirmCodeFunc = newConfirmCode
 
 func New(cfg *config.Config, store *storage.Store, alerts *anomaly.AlertStore, ctrl processController, advisor aiAdvisor, executeAI func(ai.Suggestion) error, emitter *event.Emitter) *Bot {
 	b := &Bot{
@@ -71,6 +76,7 @@ func New(cfg *config.Config, store *storage.Store, alerts *anomaly.AlertStore, c
 		executeAI:  executeAI,
 		httpClient: &http.Client{Timeout: 40 * time.Second},
 		pending:    make(map[string]pendingAction),
+		rootCtx:    context.Background(),
 	}
 	if emitter != nil {
 		emitter.On(anomaly.EventAlertRaised, b.handleAlertRaised)
@@ -85,6 +91,12 @@ func (b *Bot) SetConfig(cfg *config.Config) {
 }
 
 func (b *Bot) Start(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	b.mu.Lock()
+	b.rootCtx = ctx
+	b.mu.Unlock()
 	go b.loop(ctx)
 }
 
@@ -135,6 +147,15 @@ func (b *Bot) currentConfig() *config.Config {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return b.cfg
+}
+
+func (b *Bot) backgroundContext() context.Context {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.rootCtx != nil {
+		return b.rootCtx
+	}
+	return context.Background()
 }
 
 func sleepContext(ctx context.Context, d time.Duration) bool {
@@ -219,9 +240,12 @@ func (b *Bot) apiCall(ctx context.Context, cfg *config.Config, method string, bo
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxTelegramResponseBytes+1))
 	if err != nil {
 		return err
+	}
+	if len(raw) > maxTelegramResponseBytes {
+		return fmt.Errorf("telegram response exceeds %d bytes", maxTelegramResponseBytes)
 	}
 	if err := json.Unmarshal(raw, dst); err != nil {
 		return fmt.Errorf("decode telegram response: %w", err)
@@ -251,13 +275,13 @@ func (b *Bot) handleMessage(ctx context.Context, cfg *config.Config, msg *tgMess
 	case "kill":
 		reply = b.pidAction(cfg, msg.Chat.ID, args, func(pid uint32) error { return b.controller.Kill(pid, true) }, "kill", "killed", true)
 	case "suspend":
-		reply = b.pidAction(cfg, msg.Chat.ID, args, b.controller.Suspend, "suspend", "suspended", true)
+		reply = b.pidAction(cfg, msg.Chat.ID, args, func(pid uint32) error { return b.controller.Suspend(pid, true) }, "suspend", "suspended", true)
 	case "resume":
 		reply = b.pidAction(cfg, msg.Chat.ID, args, b.controller.Resume, "resume", "resumed", false)
 	case "killtop":
 		reply = b.topProcessAction(cfg, msg.Chat.ID, func(pid uint32) error { return b.controller.Kill(pid, true) }, "kill", "killed", true)
 	case "suspendtop":
-		reply = b.topProcessAction(cfg, msg.Chat.ID, b.controller.Suspend, "suspend", "suspended", true)
+		reply = b.topProcessAction(cfg, msg.Chat.ID, func(pid uint32) error { return b.controller.Suspend(pid, true) }, "suspend", "suspended", true)
 	case "confirm":
 		reply = b.confirmAction(args, msg.Chat.ID)
 	case "cancel":
@@ -447,10 +471,7 @@ func (b *Bot) queueConfirmation(chatID int64, ttl time.Duration, description, su
 	code, err := b.storePendingAction(chatID, ttl, description, success, run)
 	if err != nil {
 		log.Printf("telegram: confirm code generation failed: %v", err)
-		if err := run(); err != nil {
-			return fmt.Sprintf("Action failed: %v", err)
-		}
-		return success
+		return "Failed to create confirmation code; action was not executed."
 	}
 	return fmt.Sprintf("Pending %s. Confirm with /confirm %s within %s, or /cancel %s.", description, code, formatConfirmTTL(ttl), code)
 }
@@ -459,7 +480,7 @@ func (b *Bot) storePendingAction(chatID int64, ttl time.Duration, description, s
 	if ttl <= 0 {
 		ttl = 90 * time.Second
 	}
-	code, err := newConfirmCode()
+	code, err := newConfirmCodeFunc()
 	if err != nil {
 		return "", err
 	}
@@ -558,7 +579,7 @@ func (b *Bot) handleAlertRaised(data any) {
 	if alert.PID != 0 {
 		text += fmt.Sprintf("\nPID: %d", alert.PID)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(b.backgroundContext(), 10*time.Second)
 	defer cancel()
 	for _, chatID := range cfg.Telegram.AllowedChatIDs {
 		if err := b.sendMessage(ctx, cfg, chatID, text); err != nil {

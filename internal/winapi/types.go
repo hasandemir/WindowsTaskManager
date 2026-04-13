@@ -2,6 +2,8 @@
 
 package winapi
 
+import "math"
+
 // FILETIME is Win32 FILETIME (100ns ticks since 1601-01-01).
 type FILETIME struct {
 	LowDateTime  uint32
@@ -19,8 +21,19 @@ func FileTimeToUnix(ft FILETIME) int64 {
 	if ticks == 0 {
 		return 0
 	}
-	seconds := int64(ticks/10000000) - epochDiff
-	return seconds
+	seconds := ticks / 10000000
+	if seconds >= epochDiff {
+		delta := seconds - epochDiff
+		if delta > uint64(math.MaxInt64) {
+			return math.MaxInt64
+		}
+		return int64(delta)
+	}
+	delta := epochDiff - seconds
+	if delta > uint64(math.MaxInt64) {
+		return math.MinInt64
+	}
+	return -int64(delta)
 }
 
 // MEMORYSTATUSEX matches Win32 MEMORYSTATUSEX.

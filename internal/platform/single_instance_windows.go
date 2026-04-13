@@ -22,18 +22,18 @@ func AcquireSingleInstance(name string) (func(), error) {
 	if err != nil {
 		if errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
 			if h != 0 {
-				windows.CloseHandle(h)
+				_ = windows.CloseHandle(h)
 			}
 			return nil, ErrAlreadyRunning
 		}
 		return nil, err
 	}
 	if errors.Is(windows.GetLastError(), windows.ERROR_ALREADY_EXISTS) {
-		windows.CloseHandle(h)
+		_ = windows.CloseHandle(h)
 		return nil, ErrAlreadyRunning
 	}
 
 	return func() {
-		windows.CloseHandle(h)
+		_ = windows.CloseHandle(h)
 	}, nil
 }

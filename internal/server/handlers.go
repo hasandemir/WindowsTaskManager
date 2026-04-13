@@ -2,7 +2,9 @@ package server
 
 import (
 	"bytes"
+	"errors"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path"
@@ -338,7 +340,11 @@ func (s *Server) handleKillTree(w http.ResponseWriter, r *http.Request) {
 		s.controllerError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "killed": killed})
+	resp := map[string]any{"ok": true, "killed": killed}
+	if err != nil {
+		resp["partial_error"] = err.Error()
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleSuspend(w http.ResponseWriter, r *http.Request) {
@@ -346,7 +352,8 @@ func (s *Server) handleSuspend(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.controller.Suspend(pid); err != nil {
+	confirm := r.URL.Query().Get("confirm") == "true"
+	if err := s.controller.Suspend(pid, confirm); err != nil {
 		s.controllerError(w, err)
 		return
 	}
@@ -376,7 +383,8 @@ func (s *Server) handlePriority(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &body) {
 		return
 	}
-	if err := s.controller.SetPriority(pid, body.Class); err != nil {
+	confirm := r.URL.Query().Get("confirm") == "true"
+	if err := s.controller.SetPriority(pid, body.Class, confirm); err != nil {
 		s.controllerError(w, err)
 		return
 	}
@@ -394,7 +402,8 @@ func (s *Server) handleAffinity(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &body) {
 		return
 	}
-	if err := s.controller.SetAffinity(pid, body.Mask); err != nil {
+	confirm := r.URL.Query().Get("confirm") == "true"
+	if err := s.controller.SetAffinity(pid, body.Mask, confirm); err != nil {
 		s.controllerError(w, err)
 		return
 	}
@@ -413,7 +422,8 @@ func (s *Server) handleLimit(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &body) {
 		return
 	}
-	if err := s.controller.Limit(pid, body.CPUPct, body.MemBytes); err != nil {
+	confirm := r.URL.Query().Get("confirm") == "true"
+	if err := s.controller.Limit(pid, body.CPUPct, body.MemBytes, confirm); err != nil {
 		s.controllerError(w, err)
 		return
 	}
@@ -437,16 +447,16 @@ func (s *Server) handleListLimits(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) controllerError(w http.ResponseWriter, err error) {
-	switch err {
-	case controller.ErrProtected:
+	switch {
+	case errors.Is(err, controller.ErrProtected):
 		writeError(w, http.StatusForbidden, "protected", err.Error())
-	case controller.ErrCritical:
+	case errors.Is(err, controller.ErrCritical):
 		writeError(w, http.StatusForbidden, "critical", err.Error())
-	case controller.ErrSelf:
+	case errors.Is(err, controller.ErrSelf):
 		writeError(w, http.StatusForbidden, "self_protected", err.Error())
-	case controller.ErrConfirmNeeded:
+	case errors.Is(err, controller.ErrConfirmNeeded):
 		writeError(w, http.StatusConflict, "confirm_required", err.Error())
-	case controller.ErrNotFound:
+	case errors.Is(err, controller.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
@@ -553,6 +563,7 @@ func (s *Server) handleConfigGet(w http.ResponseWriter, r *http.Request) {
 	current := *s.cfg
 	s.mu.RUnlock()
 	current.AI.APIKey = maskSecret(current.AI.APIKey)
+	current.AI.ExtraHeaders = redactHeaderValues(current.AI.ExtraHeaders)
 	current.Telegram.BotToken = maskSecret(current.Telegram.BotToken)
 	writeJSON(w, http.StatusOK, &current)
 }
@@ -586,9 +597,11 @@ func (s *Server) handleAIAnalyze(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := s.advisor.Analyze(r.Context(), body.Prompt)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "ai_error", err.Error())
+		log.Printf("ai analyze: %v", err)
+		writeError(w, http.StatusBadGateway, "ai_error", publicAIErrorMessage(err))
 		return
 	}
+	s.rememberAISuggestions(resp.Actions)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"answer":  resp.Answer,
 		"actions": resp.Actions,
@@ -612,9 +625,11 @@ func (s *Server) handleAIChat(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := s.advisor.Chat(r.Context(), body.Message)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "ai_error", err.Error())
+		log.Printf("ai chat: %v", err)
+		writeError(w, http.StatusBadGateway, "ai_error", publicAIErrorMessage(err))
 		return
 	}
+	s.rememberAISuggestions(resp.Actions)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"answer":  resp.Answer,
 		"actions": resp.Actions,
@@ -698,6 +713,21 @@ func contentTypeFor(name string) string {
 		return "font/woff2"
 	}
 	return "application/octet-stream"
+}
+
+func publicAIErrorMessage(err error) string {
+	if err == nil {
+		return "AI provider request failed"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "rate limit"):
+		return "AI rate limit exceeded; try again later"
+	case strings.Contains(msg, "disabled"):
+		return "AI advisor not configured"
+	default:
+		return "AI provider request failed"
+	}
 }
 
 func alertKeyFromRequest(w http.ResponseWriter, r *http.Request) (string, bool) {

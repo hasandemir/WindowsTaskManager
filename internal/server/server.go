@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/ersinkoc/WindowsTaskManager/internal/ai"
 	"github.com/ersinkoc/WindowsTaskManager/internal/anomaly"
@@ -47,6 +48,7 @@ type Server struct {
 
 	router *Router
 	hub    *SSEHub
+	aiExec *aiSuggestionStore
 
 	mu      sync.RWMutex
 	httpSrv *http.Server
@@ -85,6 +87,7 @@ func New(opts Options) *Server {
 		csrfToken:  newCSRFSafeToken(),
 		router:     NewRouter(),
 		hub:        NewSSEHub(opts.Emitter),
+		aiExec:     newAISuggestionStore(15 * time.Minute),
 	}
 	s.routes()
 	return s
@@ -105,6 +108,11 @@ func (s *Server) Start() error {
 		Addr:              addr,
 		Handler:           s.router,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		// Keep disabled for long-lived SSE streams; finite write deadlines
+		// can terminate healthy dashboards mid-session.
+		WriteTimeout: 0,
+		IdleTimeout:  60 * time.Second,
 	}
 	s.mu.Unlock()
 	log.Printf("HTTP server listening on http://%s", addr)
@@ -128,8 +136,24 @@ func loggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: 200}
 		next(rec, r)
-		log.Printf("%s %s %d %s", r.Method, r.URL.Path, rec.status, time.Since(start))
+		// #nosec G706 -- method/path are normalized by sanitizeLogToken before logging.
+		log.Printf(
+			"%s %s %d %s",
+			sanitizeLogToken(r.Method),
+			sanitizeLogToken(r.URL.Path),
+			rec.status,
+			time.Since(start),
+		)
 	}
+}
+
+func sanitizeLogToken(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func securityHeadersMiddleware(next http.HandlerFunc) http.HandlerFunc {
@@ -249,7 +273,7 @@ func samePort(originPort, requestPort string) bool {
 func newCSRFSafeToken() string {
 	var buf [32]byte
 	if _, err := rand.Read(buf[:]); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
+		panic(fmt.Errorf("generate csrf token: %w", err))
 	}
 	return hex.EncodeToString(buf[:])
 }

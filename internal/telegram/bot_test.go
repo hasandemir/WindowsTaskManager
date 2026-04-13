@@ -4,6 +4,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +41,7 @@ func (f *fakeController) Kill(pid uint32, confirm bool) error {
 	return nil
 }
 
-func (f *fakeController) Suspend(pid uint32) error {
+func (f *fakeController) Suspend(pid uint32, confirm bool) error {
 	f.suspended = append(f.suspended, pid)
 	return nil
 }
@@ -122,7 +123,7 @@ func TestCancelAction(t *testing.T) {
 
 	bot := New(cfg, store, anomaly.NewAlertStore(32), ctrl, nil, nil, nil)
 	reply := bot.pidAction(cfg, 77, []string{"9001"}, func(pid uint32) error {
-		return ctrl.Suspend(pid)
+		return ctrl.Suspend(pid, true)
 	}, "suspend", "suspended", true)
 	code := extractCode(reply)
 
@@ -194,6 +195,36 @@ func TestAIChatQueuesConfirmableAction(t *testing.T) {
 	}
 	if len(executed) != 1 || executed[0] != "protect:claude.exe" {
 		t.Fatalf("executed=%v", executed)
+	}
+}
+
+func TestPIDActionFailsClosedWhenConfirmCodeGenerationFails(t *testing.T) {
+	old := newConfirmCodeFunc
+	newConfirmCodeFunc = func() (string, error) {
+		return "", errors.New("entropy unavailable")
+	}
+	defer func() { newConfirmCodeFunc = old }()
+
+	cfg := config.DefaultConfig()
+	cfg.Telegram.RequireConfirm = true
+
+	ctrl := &fakeController{}
+	store := storage.NewStore(60, 10)
+	store.SetLatest(&metrics.SystemSnapshot{
+		Timestamp: time.Now(),
+		Processes: []metrics.ProcessInfo{{PID: 5150, Name: "tool.exe"}},
+	})
+
+	bot := New(cfg, store, anomaly.NewAlertStore(32), ctrl, nil, nil, nil)
+	reply := bot.pidAction(cfg, 12, []string{"5150"}, func(pid uint32) error {
+		return ctrl.Kill(pid, true)
+	}, "kill", "killed", true)
+
+	if reply != "Failed to create confirmation code; action was not executed." {
+		t.Fatalf("reply=%q", reply)
+	}
+	if len(ctrl.killed) != 0 {
+		t.Fatalf("kill should not run on confirmation setup failure: %v", ctrl.killed)
 	}
 }
 

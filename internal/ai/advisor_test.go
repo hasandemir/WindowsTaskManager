@@ -172,6 +172,31 @@ func TestOpenAICall(t *testing.T) {
 	}
 }
 
+func TestOpenAICallRejectsOversizedBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, strings.Repeat("x", maxProviderResponseBytes+64))
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{AI: config.AIConfig{
+		Enabled:              true,
+		Provider:             "openai",
+		APIKey:               "sk-test",
+		Model:                "gpt-test",
+		Endpoint:             srv.URL,
+		MaxTokens:            128,
+		MaxRequestsPerMinute: 60,
+		Language:             "en",
+	}}
+	a := NewAdvisor(cfg, storage.NewStore(60, 10), func() []anomaly.Alert { return nil }, nil)
+
+	_, err := a.Analyze(context.Background(), "diagnose")
+	if err == nil || !strings.Contains(err.Error(), "provider response exceeds") {
+		t.Fatalf("expected oversized provider body error, got %v", err)
+	}
+}
+
 func TestAnalyzeDisabled(t *testing.T) {
 	cfg := &config.Config{AI: config.AIConfig{Enabled: false, MaxRequestsPerMinute: 5}}
 	a := NewAdvisor(cfg, storage.NewStore(60, 10), nil, nil)
@@ -409,4 +434,87 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("timeout waiting for condition")
+}
+
+func TestBackgroundRunUsesScheduledConfigSnapshot(t *testing.T) {
+	srvOne := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"from scheduled config"}}]}`))
+	}))
+	defer srvOne.Close()
+
+	srvTwo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"from live config"}}]}`))
+	}))
+	defer srvTwo.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.AI.Enabled = true
+	cfg.AI.Provider = "openai"
+	cfg.AI.APIKey = "sk-test"
+	cfg.AI.Endpoint = srvOne.URL
+	cfg.AI.MaxTokens = 256
+	cfg.AI.MaxRequestsPerMinute = 60
+
+	a := NewAdvisor(cfg, storage.NewStore(60, 10), func() []anomaly.Alert { return nil }, nil)
+
+	liveCfg := cloneConfig(cfg)
+	liveCfg.AI.Endpoint = srvTwo.URL
+	a.SetConfig(liveCfg)
+
+	alert := anomaly.Alert{Type: "runaway_cpu", Severity: anomaly.SeverityCritical, Title: "cpu", PID: 123, ProcessName: "node.exe"}
+	a.runBackgroundAnalysis(cloneConfig(cfg), alert, cfg.AI.MaxTokens, time.Now())
+
+	run := a.BackgroundState().LastRun
+	if run == nil {
+		t.Fatal("expected a background run")
+	}
+	if !strings.Contains(run.Answer, "from scheduled config") {
+		t.Fatalf("answer=%q want scheduled config response", run.Answer)
+	}
+}
+
+func TestBackgroundRunHonorsRootContextCancellation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	cfg := config.DefaultConfig()
+	cfg.AI.Enabled = true
+	cfg.AI.Provider = "openai"
+	cfg.AI.APIKey = "sk-test"
+	cfg.AI.Endpoint = srv.URL
+	cfg.AI.MaxTokens = 256
+	cfg.AI.MaxRequestsPerMinute = 60
+
+	a := NewAdvisor(cfg, storage.NewStore(60, 10), func() []anomaly.Alert { return nil }, nil)
+	rootCtx, cancel := context.WithCancel(context.Background())
+	a.Start(rootCtx)
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		a.runBackgroundAnalysis(cloneConfig(cfg), anomaly.Alert{
+			Type:        "runaway_cpu",
+			Severity:    anomaly.SeverityCritical,
+			Title:       "cpu",
+			PID:         123,
+			ProcessName: "node.exe",
+		}, cfg.AI.MaxTokens, time.Now())
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background run did not stop after root context cancellation")
+	}
+
+	run := a.BackgroundState().LastRun
+	if run == nil {
+		t.Fatal("expected a background run result")
+	}
+	if run.Error == "" || !strings.Contains(strings.ToLower(run.Error), "context canceled") {
+		t.Fatalf("error=%q want context canceled", run.Error)
+	}
 }

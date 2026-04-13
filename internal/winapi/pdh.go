@@ -29,7 +29,7 @@ func pdhError(op string, status uintptr) error {
 	if status == 0 {
 		return nil
 	}
-	return fmt.Errorf("%s: 0x%08X", op, uint32(status))
+	return fmt.Errorf("%s: 0x%08X", op, status)
 }
 
 // PdhQuery is an opaque PDH query handle.
@@ -41,7 +41,7 @@ type PdhCounter uintptr
 // OpenPdhQuery opens a PDH query for subsequent counter registration.
 func OpenPdhQuery() (PdhQuery, error) {
 	var query PdhQuery
-	r1, _, _ := procPdhOpenQueryW.Call(0, 0, uintptr(unsafe.Pointer(&query)))
+	r1, _, _ := procPdhOpenQueryW.Call(0, 0, uintptr(unsafe.Pointer(&query))) // #nosec G103 -- Audited Win32 unsafe interop.
 	if err := pdhError("PdhOpenQueryW", r1); err != nil {
 		return 0, err
 	}
@@ -53,7 +53,8 @@ func (q PdhQuery) Close() {
 	if q == 0 {
 		return
 	}
-	procPdhCloseQuery.Call(uintptr(q))
+	r1, _, _ := procPdhCloseQuery.Call(uintptr(q))
+	_ = r1
 }
 
 // AddEnglishCounter registers a wildcard or concrete counter path with a query.
@@ -65,9 +66,9 @@ func AddEnglishCounter(query PdhQuery, path string) (PdhCounter, error) {
 	var counter PdhCounter
 	r1, _, _ := procPdhAddEnglishCounterW.Call(
 		uintptr(query),
-		uintptr(unsafe.Pointer(pathPtr)),
+		uintptr(unsafe.Pointer(pathPtr)), // #nosec G103 -- Audited Win32 unsafe interop.
 		0,
-		uintptr(unsafe.Pointer(&counter)),
+		uintptr(unsafe.Pointer(&counter)), // #nosec G103 -- Audited Win32 unsafe interop.
 	)
 	if err := pdhError("PdhAddEnglishCounterW", r1); err != nil {
 		return 0, err
@@ -88,8 +89,8 @@ func GetFormattedCounterArrayDouble(counter PdhCounter) (map[string]float64, err
 	r1, _, _ := procPdhGetFormattedCounterArrayW.Call(
 		uintptr(counter),
 		uintptr(pdhFmtDouble),
-		uintptr(unsafe.Pointer(&bufSize)),
-		uintptr(unsafe.Pointer(&itemCount)),
+		uintptr(unsafe.Pointer(&bufSize)),   // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&itemCount)), // #nosec G103 -- Audited Win32 unsafe interop.
 		0,
 	)
 	if r1 != pdhMoreData && r1 != 0 {
@@ -103,15 +104,15 @@ func GetFormattedCounterArrayDouble(counter PdhCounter) (map[string]float64, err
 	r1, _, _ = procPdhGetFormattedCounterArrayW.Call(
 		uintptr(counter),
 		uintptr(pdhFmtDouble),
-		uintptr(unsafe.Pointer(&bufSize)),
-		uintptr(unsafe.Pointer(&itemCount)),
-		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(unsafe.Pointer(&bufSize)),   // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&itemCount)), // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&buf[0])),    // #nosec G103 -- Audited Win32 unsafe interop.
 	)
 	if err := pdhError("PdhGetFormattedCounterArrayW(data)", r1); err != nil {
 		return nil, err
 	}
 
-	items := unsafe.Slice((*pdhFmtCounterValueItemDouble)(unsafe.Pointer(&buf[0])), itemCount)
+	items := unsafe.Slice((*pdhFmtCounterValueItemDouble)(unsafe.Pointer(&buf[0])), itemCount) // #nosec G103 -- Audited Win32 unsafe interop.
 	values := make(map[string]float64, itemCount)
 	for _, item := range items {
 		if item.Name == nil || item.Value.CStatus != 0 {

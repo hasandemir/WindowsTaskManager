@@ -4,6 +4,7 @@ package winapi
 
 import (
 	"fmt"
+	"math"
 	"unsafe"
 )
 
@@ -15,13 +16,18 @@ func QueryProcessorPerformance(numCPU int) ([]SYSTEM_PROCESSOR_PERFORMANCE_INFOR
 		return nil, fmt.Errorf("invalid CPU count")
 	}
 	infos := make([]SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION, numCPU)
-	size := uint32(unsafe.Sizeof(infos[0])) * uint32(numCPU)
+	entrySize := uint64(unsafe.Sizeof(infos[0]))
+	totalSize := entrySize * uint64(numCPU)
+	if totalSize > math.MaxUint32 {
+		return nil, fmt.Errorf("processor performance table too large: %d", totalSize)
+	}
+	size := uint32(totalSize)
 	var returned uint32
 	r1, _, _ := procNtQuerySystemInformation.Call(
 		uintptr(SystemProcessorPerformanceInformation),
-		uintptr(unsafe.Pointer(&infos[0])),
+		uintptr(unsafe.Pointer(&infos[0])), // #nosec G103 -- Audited Win32 unsafe interop.
 		uintptr(size),
-		uintptr(unsafe.Pointer(&returned)),
+		uintptr(unsafe.Pointer(&returned)), // #nosec G103 -- Audited Win32 unsafe interop.
 	)
 	if r1 != 0 {
 		return nil, fmt.Errorf("NtQuerySystemInformation: status 0x%X", r1)

@@ -12,7 +12,7 @@ import (
 // ShellNotifyIcon adds, modifies, or removes a notification area icon.
 func ShellNotifyIcon(message uint32, nid *NOTIFYICONDATAW) error {
 	nid.Size = uint32(unsafe.Sizeof(*nid))
-	r1, _, e := procShellNotifyIconW.Call(uintptr(message), uintptr(unsafe.Pointer(nid)))
+	r1, _, e := procShellNotifyIconW.Call(uintptr(message), uintptr(unsafe.Pointer(nid))) // #nosec G103 -- Audited Win32 unsafe interop.
 	if r1 == 0 {
 		return fmt.Errorf("Shell_NotifyIconW: %w", e)
 	}
@@ -31,11 +31,11 @@ func ShellExecute(verb, file, params, dir string, show int32) error {
 
 	r1, _, e := procShellExecuteW.Call(
 		0,
-		uintptr(unsafe.Pointer(verbPtr)),
-		uintptr(unsafe.Pointer(filePtr)),
-		uintptr(unsafe.Pointer(paramsPtr)),
-		uintptr(unsafe.Pointer(dirPtr)),
-		uintptr(show),
+		uintptr(unsafe.Pointer(verbPtr)),   // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(filePtr)),   // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(paramsPtr)), // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(dirPtr)),    // #nosec G103 -- Audited Win32 unsafe interop.
+		int32Param(show),
 	)
 	if r1 <= 32 {
 		return fmt.Errorf("ShellExecuteW: code %d (%w)", r1, e)

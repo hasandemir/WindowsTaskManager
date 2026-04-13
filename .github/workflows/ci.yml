@@ -16,9 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
-          go-version: "1.23"
+          go-version-file: go.mod
           cache: true
 
       - name: Install staticcheck
@@ -27,12 +27,22 @@ jobs:
           go install honnef.co/go/tools/cmd/staticcheck@latest
           go install golang.org/x/tools/cmd/deadcode@latest
           go install mvdan.cc/unparam@latest
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Verify modules
+        run: go mod verify
 
       - name: Test
         run: go test ./... -count=1
 
       - name: Vet
         run: go vet ./...
+
+      - name: Govulncheck
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:USERPROFILE\go\bin;$env:PATH"
+          govulncheck ./...
 
       - name: Staticcheck
         shell: pwsh
@@ -51,6 +61,26 @@ jobs:
         run: |
           $env:PATH = "$env:USERPROFILE\go\bin;$env:PATH"
           unparam ./...
+
+      - name: Setup MinGW for race detector
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+
+      - name: Add MinGW to PATH
+        shell: pwsh
+        run: |
+          "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin" | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Race
+        shell: pwsh
+        run: |
+          $env:CGO_ENABLED = "1"
+          go test -race ./...
 
       - name: Build
         shell: pwsh

@@ -39,6 +39,7 @@ type aiPreset struct {
 
 // aiPresets is the curated list of provider/model combinations the dashboard
 // offers as starter templates. Adding a new one is a one-line change.
+// #nosec G101 -- APIKeyHint contains public key formats/examples, not secrets.
 var aiPresets = []aiPreset{
 	{
 		ID:         "anthropic",
@@ -244,7 +245,7 @@ func dtoFromConfig(ai *config.AIConfig) aiConfigDTO {
 		APIKey:               maskSecret(ai.APIKey),
 		Model:                ai.Model,
 		Endpoint:             ai.Endpoint,
-		ExtraHeaders:         ai.ExtraHeaders,
+		ExtraHeaders:         redactHeaderValues(ai.ExtraHeaders),
 		Language:             ai.Language,
 		MaxTokens:            ai.MaxTokens,
 		MaxRequestsPerMinute: ai.MaxRequestsPerMinute,
@@ -263,4 +264,41 @@ func maskSecret(s string) string {
 		return "****"
 	}
 	return "****" + s[len(s)-4:]
+}
+
+func redactHeaderValues(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(src))
+	for k, v := range src {
+		if isSensitiveHeaderKey(k) {
+			out[k] = maskSecret(v)
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+func isSensitiveHeaderKey(key string) bool {
+	k := strings.ToLower(strings.TrimSpace(key))
+	switch {
+	case k == "authorization":
+		return true
+	case k == "proxy-authorization":
+		return true
+	case strings.Contains(k, "api-key"):
+		return true
+	case strings.Contains(k, "api_key"):
+		return true
+	case strings.HasSuffix(k, "key"):
+		return true
+	case strings.Contains(k, "token"):
+		return true
+	case strings.Contains(k, "secret"):
+		return true
+	default:
+		return false
+	}
 }

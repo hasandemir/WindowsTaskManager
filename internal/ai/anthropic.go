@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -70,9 +69,9 @@ func (a *Advisor) callAnthropic(ctx context.Context, cfg *config.Config, prompt 
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readProviderBody(resp.Body)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode >= 400 {
 		return "", fmt.Errorf("anthropic %d: %s", resp.StatusCode, truncateForError(string(body)))

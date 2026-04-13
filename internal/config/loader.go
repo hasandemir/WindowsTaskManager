@@ -21,6 +21,7 @@ func Load(path string) (*Config, error) {
 		return cfg, nil
 	}
 
+	// #nosec G304 -- path is sourced from local app config path (not remote input).
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
@@ -42,7 +43,9 @@ func Load(path string) (*Config, error) {
 			cfg.Anomaly.IgnoreProcesses = mergeUniqueFold(defaults.Anomaly.IgnoreProcesses, preservedIgnore)
 		}
 		cfg.SchemaVersion = CurrentSchemaVersion
-		_ = Save(path, cfg) // best-effort; loader stays green if the disk write fails
+		if err := Save(path, cfg); err != nil {
+			return nil, fmt.Errorf("persist migrated config: %w", err)
+		}
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
@@ -80,20 +83,20 @@ func mergeUniqueFold(base, extra []string) []string {
 
 // Save writes the config as YAML to the given path.
 func Save(path string, cfg *Config) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
 	}
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal config: %w", err)
 	}
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
-		return err
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+		return fmt.Errorf("write temp config: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		_ = os.Remove(tmpPath)
-		return err
+		return fmt.Errorf("replace config: %w", err)
 	}
 	return nil
 }

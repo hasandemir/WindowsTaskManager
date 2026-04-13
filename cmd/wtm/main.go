@@ -90,7 +90,7 @@ func main() {
 		if srv == nil {
 			return fmt.Errorf("server not initialized")
 		}
-		return srv.ExecuteAISuggestion(suggestion)
+		return srv.ExecuteAISuggestion(suggestion, true)
 	}, emitter)
 	var trayInst *tray.Tray
 
@@ -135,6 +135,7 @@ func main() {
 	rootCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	advisor.Start(rootCtx)
 	mgr.Start(rootCtx)
 	engine.Start(rootCtx)
 	tgBot.Start(rootCtx)
@@ -167,7 +168,9 @@ func main() {
 	if !*noTray {
 		trayInst = tray.New(cfg, dashURL, cfgPath, emitter, func() {
 			cancel()
-			_ = srv.Shutdown(context.Background())
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			_ = srv.Shutdown(shutdownCtx)
 		})
 		trayWG.Add(1)
 		go func() {

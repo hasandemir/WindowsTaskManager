@@ -10,21 +10,24 @@ import (
 // GetExtendedTcpTable wraps the Win32 call. Returns raw byte buffer; caller parses based on family.
 func getExtendedTcpTableRaw(family uint32) ([]byte, error) {
 	var size uint32
-	procGetExtendedTcpTable.Call(
+	r1, _, e := procGetExtendedTcpTable.Call(
 		0,
-		uintptr(unsafe.Pointer(&size)),
-		1, // sorted = true
+		uintptr(unsafe.Pointer(&size)), // #nosec G103 -- Audited Win32 unsafe interop.
+		1,                              // sorted = true
 		uintptr(family),
 		uintptr(TCP_TABLE_OWNER_PID_ALL),
 		0,
 	)
+	if r1 != 0 && r1 != 122 { // ERROR_INSUFFICIENT_BUFFER
+		return nil, fmt.Errorf("GetExtendedTcpTable(size): status %d (%w)", r1, e)
+	}
 	if size == 0 {
 		return nil, nil
 	}
 	buf := make([]byte, size)
-	r1, _, e := procGetExtendedTcpTable.Call(
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(unsafe.Pointer(&size)),
+	r1, _, e = procGetExtendedTcpTable.Call(
+		uintptr(unsafe.Pointer(&buf[0])), // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&size)),   // #nosec G103 -- Audited Win32 unsafe interop.
 		1,
 		uintptr(family),
 		uintptr(TCP_TABLE_OWNER_PID_ALL),
@@ -33,7 +36,10 @@ func getExtendedTcpTableRaw(family uint32) ([]byte, error) {
 	if r1 != 0 {
 		return nil, fmt.Errorf("GetExtendedTcpTable: status %d (%w)", r1, e)
 	}
-	return buf[:size], nil
+	if uint64(size) > uint64(len(buf)) {
+		return nil, fmt.Errorf("GetExtendedTcpTable: returned size %d exceeds buffer %d", size, len(buf))
+	}
+	return buf[:int(size)], nil
 }
 
 // GetTcp4Table returns IPv4 TCP rows with owning PIDs.
@@ -42,15 +48,15 @@ func GetTcp4Table() ([]MIB_TCPROW_OWNER_PID, error) {
 	if err != nil || len(buf) < 4 {
 		return nil, err
 	}
-	count := *(*uint32)(unsafe.Pointer(&buf[0]))
+	count := *(*uint32)(unsafe.Pointer(&buf[0])) // #nosec G103 -- Audited Win32 unsafe interop.
 	rowSize := unsafe.Sizeof(MIB_TCPROW_OWNER_PID{})
-	rows := make([]MIB_TCPROW_OWNER_PID, count)
+	rows := make([]MIB_TCPROW_OWNER_PID, 0, count)
 	for i := uint32(0); i < count; i++ {
-		offset := 4 + uintptr(i)*rowSize
-		if int(offset)+int(rowSize) > len(buf) {
-			break
+		offset := uintptr(4) + uintptr(i)*rowSize
+		if offset+rowSize > uintptr(len(buf)) {
+			return nil, fmt.Errorf("GetTcp4Table: truncated buffer at row %d/%d", i, count)
 		}
-		rows[i] = *(*MIB_TCPROW_OWNER_PID)(unsafe.Pointer(&buf[offset]))
+		rows = append(rows, *(*MIB_TCPROW_OWNER_PID)(unsafe.Pointer(&buf[offset]))) // #nosec G103 -- Audited Win32 unsafe interop.
 	}
 	return rows, nil
 }
@@ -61,36 +67,39 @@ func GetTcp6Table() ([]MIB_TCP6ROW_OWNER_PID, error) {
 	if err != nil || len(buf) < 4 {
 		return nil, err
 	}
-	count := *(*uint32)(unsafe.Pointer(&buf[0]))
+	count := *(*uint32)(unsafe.Pointer(&buf[0])) // #nosec G103 -- Audited Win32 unsafe interop.
 	rowSize := unsafe.Sizeof(MIB_TCP6ROW_OWNER_PID{})
-	rows := make([]MIB_TCP6ROW_OWNER_PID, count)
+	rows := make([]MIB_TCP6ROW_OWNER_PID, 0, count)
 	for i := uint32(0); i < count; i++ {
-		offset := 4 + uintptr(i)*rowSize
-		if int(offset)+int(rowSize) > len(buf) {
-			break
+		offset := uintptr(4) + uintptr(i)*rowSize
+		if offset+rowSize > uintptr(len(buf)) {
+			return nil, fmt.Errorf("GetTcp6Table: truncated buffer at row %d/%d", i, count)
 		}
-		rows[i] = *(*MIB_TCP6ROW_OWNER_PID)(unsafe.Pointer(&buf[offset]))
+		rows = append(rows, *(*MIB_TCP6ROW_OWNER_PID)(unsafe.Pointer(&buf[offset]))) // #nosec G103 -- Audited Win32 unsafe interop.
 	}
 	return rows, nil
 }
 
 func getExtendedUdpTableRaw(family uint32) ([]byte, error) {
 	var size uint32
-	procGetExtendedUdpTable.Call(
+	r1, _, e := procGetExtendedUdpTable.Call(
 		0,
-		uintptr(unsafe.Pointer(&size)),
+		uintptr(unsafe.Pointer(&size)), // #nosec G103 -- Audited Win32 unsafe interop.
 		1,
 		uintptr(family),
 		uintptr(UDP_TABLE_OWNER_PID),
 		0,
 	)
+	if r1 != 0 && r1 != 122 { // ERROR_INSUFFICIENT_BUFFER
+		return nil, fmt.Errorf("GetExtendedUdpTable(size): status %d (%w)", r1, e)
+	}
 	if size == 0 {
 		return nil, nil
 	}
 	buf := make([]byte, size)
-	r1, _, e := procGetExtendedUdpTable.Call(
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(unsafe.Pointer(&size)),
+	r1, _, e = procGetExtendedUdpTable.Call(
+		uintptr(unsafe.Pointer(&buf[0])), // #nosec G103 -- Audited Win32 unsafe interop.
+		uintptr(unsafe.Pointer(&size)),   // #nosec G103 -- Audited Win32 unsafe interop.
 		1,
 		uintptr(family),
 		uintptr(UDP_TABLE_OWNER_PID),
@@ -99,7 +108,10 @@ func getExtendedUdpTableRaw(family uint32) ([]byte, error) {
 	if r1 != 0 {
 		return nil, fmt.Errorf("GetExtendedUdpTable: status %d (%w)", r1, e)
 	}
-	return buf[:size], nil
+	if uint64(size) > uint64(len(buf)) {
+		return nil, fmt.Errorf("GetExtendedUdpTable: returned size %d exceeds buffer %d", size, len(buf))
+	}
+	return buf[:int(size)], nil
 }
 
 // GetUdp4Table returns IPv4 UDP rows with owning PIDs.
@@ -108,15 +120,15 @@ func GetUdp4Table() ([]MIB_UDPROW_OWNER_PID, error) {
 	if err != nil || len(buf) < 4 {
 		return nil, err
 	}
-	count := *(*uint32)(unsafe.Pointer(&buf[0]))
+	count := *(*uint32)(unsafe.Pointer(&buf[0])) // #nosec G103 -- Audited Win32 unsafe interop.
 	rowSize := unsafe.Sizeof(MIB_UDPROW_OWNER_PID{})
-	rows := make([]MIB_UDPROW_OWNER_PID, count)
+	rows := make([]MIB_UDPROW_OWNER_PID, 0, count)
 	for i := uint32(0); i < count; i++ {
-		offset := 4 + uintptr(i)*rowSize
-		if int(offset)+int(rowSize) > len(buf) {
-			break
+		offset := uintptr(4) + uintptr(i)*rowSize
+		if offset+rowSize > uintptr(len(buf)) {
+			return nil, fmt.Errorf("GetUdp4Table: truncated buffer at row %d/%d", i, count)
 		}
-		rows[i] = *(*MIB_UDPROW_OWNER_PID)(unsafe.Pointer(&buf[offset]))
+		rows = append(rows, *(*MIB_UDPROW_OWNER_PID)(unsafe.Pointer(&buf[offset]))) // #nosec G103 -- Audited Win32 unsafe interop.
 	}
 	return rows, nil
 }
@@ -127,20 +139,20 @@ func GetUdp6Table() ([]MIB_UDP6ROW_OWNER_PID, error) {
 	if err != nil || len(buf) < 4 {
 		return nil, err
 	}
-	count := *(*uint32)(unsafe.Pointer(&buf[0]))
+	count := *(*uint32)(unsafe.Pointer(&buf[0])) // #nosec G103 -- Audited Win32 unsafe interop.
 	rowSize := unsafe.Sizeof(MIB_UDP6ROW_OWNER_PID{})
-	rows := make([]MIB_UDP6ROW_OWNER_PID, count)
+	rows := make([]MIB_UDP6ROW_OWNER_PID, 0, count)
 	for i := uint32(0); i < count; i++ {
-		offset := 4 + uintptr(i)*rowSize
-		if int(offset)+int(rowSize) > len(buf) {
-			break
+		offset := uintptr(4) + uintptr(i)*rowSize
+		if offset+rowSize > uintptr(len(buf)) {
+			return nil, fmt.Errorf("GetUdp6Table: truncated buffer at row %d/%d", i, count)
 		}
-		rows[i] = *(*MIB_UDP6ROW_OWNER_PID)(unsafe.Pointer(&buf[offset]))
+		rows = append(rows, *(*MIB_UDP6ROW_OWNER_PID)(unsafe.Pointer(&buf[offset]))) // #nosec G103 -- Audited Win32 unsafe interop.
 	}
 	return rows, nil
 }
 
-// MIB_IF_ROW2 (partial — we read into a fixed-size raw buffer and parse manually).
+// MIB_IF_ROW2 (partial â€” we read into a fixed-size raw buffer and parse manually).
 const ifRow2Size = 1352
 
 // IfRow2 holds the fields we care about parsed from MIB_IF_ROW2.
@@ -166,10 +178,10 @@ type IfRow2 struct {
 //
 // tablePtr is declared as unsafe.Pointer (not uintptr) so vet's
 // unsafeptr analyzer is satisfied: we never do arithmetic on a uintptr
-// and convert it back — all offsetting goes through unsafe.Add.
+// and convert it back â€” all offsetting goes through unsafe.Add.
 func GetIfTable2() ([]IfRow2, error) {
 	var tablePtr unsafe.Pointer
-	r1, _, e := procGetIfTable2.Call(uintptr(unsafe.Pointer(&tablePtr)))
+	r1, _, e := procGetIfTable2.Call(uintptr(unsafe.Pointer(&tablePtr))) // #nosec G103 -- Audited Win32 unsafe interop.
 	if r1 != 0 {
 		return nil, fmt.Errorf("GetIfTable2: %w", e)
 	}

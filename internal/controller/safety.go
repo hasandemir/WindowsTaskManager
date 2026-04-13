@@ -4,7 +4,9 @@ package controller
 
 import (
 	"errors"
+	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -29,9 +31,18 @@ type Safety struct {
 }
 
 func NewSafety(cfg *config.Config) *Safety {
+	pid := os.Getpid()
+	selfPID := uint32(0)
+	if pid > 0 {
+		if uint64(pid) > uint64(math.MaxUint32) {
+			selfPID = math.MaxUint32
+		} else {
+			selfPID = uint32(pid)
+		}
+	}
 	return &Safety{
 		cfg:     cfg,
-		selfPID: uint32(os.Getpid()),
+		selfPID: selfPID,
 	}
 }
 
@@ -43,9 +54,9 @@ func (s *Safety) SetConfig(cfg *config.Config) {
 }
 
 // Check verifies whether destructive action is allowed against `info`.
-// `forceConfirmed` indicates the user has provided explicit confirmation
+// `confirmed` indicates the user has provided explicit confirmation
 // for confirm-required cases.
-func (s *Safety) Check(info metrics.ProcessInfo, forceConfirmed bool) error {
+func (s *Safety) Check(info metrics.ProcessInfo, confirmed bool) error {
 	s.mu.RLock()
 	cfg := s.cfg
 	s.mu.RUnlock()
@@ -67,7 +78,7 @@ func (s *Safety) Check(info metrics.ProcessInfo, forceConfirmed bool) error {
 			return ErrProtected
 		}
 	}
-	if isSystemPath(info.ExePath) && cfg.Controller.ConfirmKillSystem && !forceConfirmed {
+	if isSystemPath(info.ExePath) && cfg.Controller.ConfirmKillSystem && !confirmed {
 		return ErrConfirmNeeded
 	}
 	return nil
@@ -78,6 +89,14 @@ func isSystemPath(path string) bool {
 	if path == "" {
 		return false
 	}
-	p := strings.ToLower(path)
-	return strings.HasPrefix(p, `c:\windows\`) || strings.HasPrefix(p, `c:\windows\system32\`)
+	systemRoot := strings.TrimSpace(os.Getenv("SystemRoot"))
+	if systemRoot == "" {
+		systemRoot = `C:\Windows`
+	}
+	root := strings.ToLower(filepath.Clean(systemRoot))
+	p := strings.ToLower(filepath.Clean(path))
+	if !strings.HasSuffix(root, `\`) {
+		root += `\`
+	}
+	return strings.HasPrefix(p, root)
 }

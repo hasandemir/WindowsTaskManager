@@ -71,6 +71,7 @@ func (s *Server) handleConfigUpdate(w http.ResponseWriter, r *http.Request) {
 	current := cloneConfig(s.cfg)
 	s.mu.RUnlock()
 	current.AI.APIKey = maskSecret(current.AI.APIKey)
+	current.AI.ExtraHeaders = redactHeaderValues(current.AI.ExtraHeaders)
 	current.Telegram.BotToken = maskSecret(current.Telegram.BotToken)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":     true,

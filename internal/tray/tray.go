@@ -153,9 +153,9 @@ func (t *Tray) destroy() {
 
 // wndProc is the window procedure callback. Must match WNDPROC signature.
 func (t *Tray) wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
-	switch uint32(msg) {
+	switch lowWordUint32(msg) {
 	case winapi.WM_TRAYICON:
-		switch uint32(lParam) {
+		switch lowWordUint32(lParam) {
 		case winapi.WM_LBUTTONDBLCLK, winapi.WM_LBUTTONUP:
 			t.openDashboard()
 		case winapi.WM_RBUTTONUP:
@@ -304,3 +304,8 @@ func copyToFixed(dst []uint16, s string) {
 // Compile-time check that we use unsafe (silences linters that may flag the
 // import as unused via aliasing — currently no direct usages).
 var _ = unsafe.Sizeof(0)
+
+func lowWordUint32(v uintptr) uint32 {
+	// #nosec G115 -- Windows message parameters are 32-bit values.
+	return uint32(v & 0xFFFFFFFF)
+}

@@ -3,6 +3,7 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -146,12 +147,12 @@ func collectDescendants(procs []metrics.ProcessInfo, root uint32) []uint32 {
 }
 
 // Suspend pauses every thread in a process via SuspendThread.
-func (c *Controller) Suspend(pid uint32) error {
+func (c *Controller) Suspend(pid uint32, confirm bool) error {
 	info, err := c.findProcess(pid)
 	if err != nil {
 		return err
 	}
-	if err := c.safety.Check(info, true); err != nil && err != ErrConfirmNeeded {
+	if err := c.safety.Check(info, confirm); err != nil {
 		return err
 	}
 	if err := suspendOrResumeThreads(pid, true); err != nil {
@@ -182,32 +183,57 @@ func suspendOrResumeThreads(pid uint32, suspend bool) error {
 		return err
 	}
 	const access = windows.THREAD_SUSPEND_RESUME
+	var (
+		touched  int
+		firstErr error
+	)
 	for {
 		if te.OwnerProcessID == pid {
+			touched++
 			h, err := winapi.OpenThreadHandle(access, te.ThreadID)
-			if err == nil {
+			if err != nil {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("open thread %d: %w", te.ThreadID, err)
+				}
+			} else {
 				if suspend {
-					_, _ = winapi.SuspendThread(h)
+					_, err = winapi.SuspendThread(h)
 				} else {
-					_, _ = winapi.ResumeThread(h)
+					_, err = winapi.ResumeThread(h)
 				}
 				winapi.CloseHandleSafe(h)
+				if err != nil && firstErr == nil {
+					op := "resume"
+					if suspend {
+						op = "suspend"
+					}
+					firstErr = fmt.Errorf("%s thread %d: %w", op, te.ThreadID, err)
+				}
 			}
 		}
 		if err := winapi.Thread32Next(snap, &te); err != nil {
+			if !errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+				return fmt.Errorf("enumerate threads: %w", err)
+			}
 			break
 		}
+	}
+	if touched == 0 {
+		return fmt.Errorf("no threads found for pid %d", pid)
+	}
+	if firstErr != nil {
+		return firstErr
 	}
 	return nil
 }
 
 // SetPriority maps a textual class to a Win32 priority class and applies it.
-func (c *Controller) SetPriority(pid uint32, class string) error {
+func (c *Controller) SetPriority(pid uint32, class string, confirm bool) error {
 	info, err := c.findProcess(pid)
 	if err != nil {
 		return err
 	}
-	if err := c.safety.Check(info, true); err != nil && err != ErrConfirmNeeded {
+	if err := c.safety.Check(info, confirm); err != nil {
 		return err
 	}
 	priority, ok := priorityClassFromString(class)
@@ -245,12 +271,12 @@ func priorityClassFromString(s string) (uint32, bool) {
 }
 
 // SetAffinity restricts a process to a subset of logical CPUs.
-func (c *Controller) SetAffinity(pid uint32, mask uint64) error {
+func (c *Controller) SetAffinity(pid uint32, mask uint64, confirm bool) error {
 	info, err := c.findProcess(pid)
 	if err != nil {
 		return err
 	}
-	if err := c.safety.Check(info, true); err != nil && err != ErrConfirmNeeded {
+	if err := c.safety.Check(info, confirm); err != nil {
 		return err
 	}
 	if mask == 0 {
@@ -271,12 +297,12 @@ func (c *Controller) SetAffinity(pid uint32, mask uint64) error {
 // Limit creates a Job Object around the PID and applies CPU/memory caps.
 // cpuPct is 1..100 (0 disables CPU rate control); maxBytes is the working
 // set / process memory cap (0 disables).
-func (c *Controller) Limit(pid uint32, cpuPct int, maxBytes uint64) error {
+func (c *Controller) Limit(pid uint32, cpuPct int, maxBytes uint64, confirm bool) error {
 	info, err := c.findProcess(pid)
 	if err != nil {
 		return err
 	}
-	if err := c.safety.Check(info, true); err != nil && err != ErrConfirmNeeded {
+	if err := c.safety.Check(info, confirm); err != nil {
 		return err
 	}
 	if cpuPct < 0 || cpuPct > 100 {
@@ -316,7 +342,7 @@ func (c *Controller) Limit(pid uint32, cpuPct int, maxBytes uint64) error {
 		if err := winapi.SetInformationJobObject(
 			job,
 			winapi.JobObjectExtendedLimitInformation,
-			unsafe.Pointer(&ext),
+			unsafe.Pointer(&ext), // #nosec G103 -- Audited Win32 unsafe interop.
 			uint32(unsafe.Sizeof(ext)),
 		); err != nil {
 			winapi.CloseHandleSafe(job)
@@ -332,7 +358,7 @@ func (c *Controller) Limit(pid uint32, cpuPct int, maxBytes uint64) error {
 		if err := winapi.SetInformationJobObject(
 			job,
 			winapi.JobObjectCpuRateControlInformation,
-			unsafe.Pointer(&rate),
+			unsafe.Pointer(&rate), // #nosec G103 -- Audited Win32 unsafe interop.
 			uint32(unsafe.Sizeof(rate)),
 		); err != nil {
 			winapi.CloseHandleSafe(job)

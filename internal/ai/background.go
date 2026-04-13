@@ -269,10 +269,10 @@ func (a *Advisor) runBackgroundAnalysis(cfg *config.Config, alert anomaly.Alert,
 		ReservedTokens: reserved,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(a.backgroundContext(), 45*time.Second)
 	defer cancel()
 
-	result, err := a.Analyze(ctx, buildBackgroundPrompt(alert))
+	result, err := a.analyzeWithConfig(ctx, cfg, buildBackgroundPrompt(alert))
 	run.FinishedAt = time.Now()
 	if err != nil {
 		run.Error = err.Error()
@@ -283,7 +283,6 @@ func (a *Advisor) runBackgroundAnalysis(cfg *config.Config, alert anomaly.Alert,
 	}
 
 	a.bgMu.Lock()
-	defer a.bgMu.Unlock()
 
 	if run.Error == "" {
 		run.Actions = a.applyAutoPolicyLocked(cfg, run.Actions)
@@ -308,6 +307,7 @@ func (a *Advisor) runBackgroundAnalysis(cfg *config.Config, alert anomaly.Alert,
 	if limit := a.bg.historyLimit; limit > 0 && len(a.bg.recentRuns) > limit {
 		a.bg.recentRuns = append([]BackgroundRun(nil), a.bg.recentRuns[len(a.bg.recentRuns)-limit:]...)
 	}
+	a.bgMu.Unlock()
 
 	if a.emitter != nil {
 		a.emitter.Emit(EventBackgroundAnalysis, cloneRun(&run))

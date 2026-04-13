@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -49,12 +50,16 @@ type Advisor struct {
 
 	bgMu sync.RWMutex
 	bg   backgroundTracker
+
+	rootCtx context.Context
 }
 
 type chatTurn struct {
 	Role    string
 	Content string
 }
+
+const maxProviderResponseBytes = 2 << 20
 
 // NewAdvisor builds a new advisor. alertSource is a closure that returns
 // the current active alerts for the prompt context.
@@ -67,12 +72,23 @@ func NewAdvisor(cfg *config.Config, store *storage.Store, alertSource func() []a
 		cache:      NewCache(60*time.Second, 64),
 		httpClient: &http.Client{Timeout: 60 * time.Second},
 		emitter:    emitter,
+		rootCtx:    context.Background(),
 	}
 	a.bg.applyConfig(cfg)
 	if emitter != nil {
 		emitter.On(anomaly.EventAlertRaised, a.handleRaisedAlert)
 	}
 	return a
+}
+
+// Start binds the advisor's background work to the application lifecycle.
+func (a *Advisor) Start(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	a.mu.Lock()
+	a.rootCtx = ctx
+	a.mu.Unlock()
 }
 
 // SetConfig hot-swaps the active config.
@@ -122,7 +138,11 @@ func (a *Advisor) Analyze(ctx context.Context, userQuestion string) (*AnalyzeRes
 	a.mu.RLock()
 	cfg := a.cfg
 	a.mu.RUnlock()
-	if !cfg.AI.Enabled || cfg.AI.APIKey == "" {
+	return a.analyzeWithConfig(ctx, cfg, userQuestion)
+}
+
+func (a *Advisor) analyzeWithConfig(ctx context.Context, cfg *config.Config, userQuestion string) (*AnalyzeResult, error) {
+	if cfg == nil || !cfg.AI.Enabled || cfg.AI.APIKey == "" {
 		return nil, errors.New("AI advisor disabled")
 	}
 
@@ -194,7 +214,7 @@ func (a *Advisor) runPrompt(ctx context.Context, cfg *config.Config, prompt stri
 	a.totalReqs++
 	a.lastReqAt = time.Now()
 	if err != nil {
-		a.lastErr = err.Error()
+		a.lastErr = statusErrorMessage(err)
 	} else {
 		a.lastErr = ""
 	}
@@ -259,4 +279,39 @@ func (a *Advisor) BackgroundState() BackgroundState {
 	a.bgMu.RLock()
 	defer a.bgMu.RUnlock()
 	return a.bg.snapshot(cfg, configured)
+}
+
+func (a *Advisor) backgroundContext() context.Context {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.rootCtx != nil {
+		return a.rootCtx
+	}
+	return context.Background()
+}
+
+func readProviderBody(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxProviderResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxProviderResponseBytes {
+		return nil, fmt.Errorf("provider response exceeds %d bytes", maxProviderResponseBytes)
+	}
+	return body, nil
+}
+
+func statusErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "rate limit"):
+		return "AI rate limit exceeded; try again later"
+	case strings.Contains(msg, "disabled"):
+		return "AI advisor disabled"
+	default:
+		return "AI provider request failed"
+	}
 }

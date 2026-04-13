@@ -53,7 +53,7 @@ configs/                reference config
 ## Prerequisites
 
 - Windows
-- Go `1.23+`
+- Go `1.25+` (`go.mod` pins toolchain `go1.26.2`)
 - Node.js `20+` if you want to change the frontend
 
 ## Build
@@ -84,7 +84,7 @@ cd ..
 go build -o wtm.exe ./cmd/wtm
 ```
 
-`build.ps1` currently runs `go mod tidy`, `go fmt`, `go vet`, `deadcode`, `unparam`, and then builds the Windows binary. It does not run the frontend build for you.
+`build.ps1` now runs `go mod tidy`, `go mod verify`, `go fmt`, `go test`, `go vet`, `govulncheck`, `deadcode`, `unparam`, and then builds the Windows binary. If `gcc` is available it also runs `go test -race`; otherwise it skips that step with a warning. It does not run the frontend build for you.
 
 ## Run
 
@@ -382,7 +382,15 @@ Backend:
 ```powershell
 go test ./... -count=1
 go vet ./...
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 go build ./cmd/wtm
+```
+
+Race detector on Windows needs a C toolchain such as MinGW/MSYS2 `gcc`:
+
+```powershell
+$env:CGO_ENABLED = "1"
+go test -race ./...
 ```
 
 Frontend:

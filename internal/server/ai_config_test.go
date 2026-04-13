@@ -222,3 +222,30 @@ func TestMaskSecret(t *testing.T) {
 		}
 	}
 }
+
+func TestAIConfigGetRedactsSensitiveHeaders(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.AI.ExtraHeaders = map[string]string{
+		"Authorization": "Bearer super-secret-token",
+		"X-Title":       "WTM",
+	}
+	s, _ := newTestServer(t, "", cfg)
+
+	req := httptest.NewRequest("GET", "/api/v1/ai/config", nil)
+	rr := httptest.NewRecorder()
+	s.handleAIConfigGet(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+
+	var got aiConfigDTO
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.HasPrefix(got.ExtraHeaders["Authorization"], "****") {
+		t.Fatalf("authorization header not redacted: %q", got.ExtraHeaders["Authorization"])
+	}
+	if got.ExtraHeaders["X-Title"] != "WTM" {
+		t.Fatalf("non-sensitive header mutated: %q", got.ExtraHeaders["X-Title"])
+	}
+}

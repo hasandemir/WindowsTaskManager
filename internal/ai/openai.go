@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -81,9 +80,9 @@ func (a *Advisor) callOpenAI(ctx context.Context, cfg *config.Config, prompt str
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readProviderBody(resp.Body)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode >= 400 {
 		return "", fmt.Errorf("openai %d: %s", resp.StatusCode, truncateForError(string(body)))

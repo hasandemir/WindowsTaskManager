@@ -11,6 +11,26 @@ Semantic Versioning.
 
 - Placeholder for upcoming changes.
 
+## [0.2.0] - 2026-04-25
+
+### Added
+
+- Added the React/Vite frontend application with embedded assets, routed pages, shared UI components, live data bridge, tests, and typed API client.
+- Added expanded project documentation covering architecture, production readiness, roadmap, and web UI notes.
+- Added CI coverage for govulncheck, deadcode, unparam, module verification, and race-detector tests where supported.
+
+### Changed
+
+- Reworked the README with clearer setup, feature, configuration, and release guidance.
+- Updated the GitHub Actions release workflow to use the Go version from `go.mod`, run additional analyzers, and publish versioned Windows artifacts with checksums.
+- Removed legacy static web assets in favor of the new embedded frontend build pipeline.
+- Removed compiled executables from version control and expanded ignore rules for generated binaries and frontend outputs.
+
+### Fixed
+
+- Strengthened collector, config, controller, server, storage, Telegram, and AI behavior with broader unit coverage and defensive request handling.
+- Improved Windows collector and WinAPI integrations for disk, GPU, network, process, port, and runtime telemetry paths.
+
 ## [0.1.0] - 2026-04-11
 
 ### Added

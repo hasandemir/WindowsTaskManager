@@ -107,7 +107,7 @@ func sameAISuggestion(left, right ai.Suggestion) bool {
 	if strings.TrimSpace(left.ID) != strings.TrimSpace(right.ID) {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(left.Type), strings.TrimSpace(right.Type)) == false {
+	if !strings.EqualFold(strings.TrimSpace(left.Type), strings.TrimSpace(right.Type)) {
 		return false
 	}
 	if left.PID != right.PID {

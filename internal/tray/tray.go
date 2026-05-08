@@ -57,6 +57,17 @@ func (t *Tray) SetConfig(cfg *config.Config) {
 	t.mu.Unlock()
 }
 
+// Stop signals the tray message loop to exit. It does not call onQuit
+// to avoid double-cancel when Stop is called as part of a wider shutdown.
+func (t *Tray) Stop() {
+	t.mu.Lock()
+	hwnd := t.hwnd
+	t.mu.Unlock()
+	if hwnd != 0 {
+		winapi.PostMessage(hwnd, 0x0012, 0, 0) // WM_QUIT
+	}
+}
+
 // Run blocks until the tray icon is destroyed. It must be called on a
 // dedicated OS thread because Windows requires the message loop to live
 // on the thread that registered the window class.

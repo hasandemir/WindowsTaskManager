@@ -20,6 +20,7 @@ import (
 	"github.com/ersinkoc/WindowsTaskManager/internal/collector"
 	"github.com/ersinkoc/WindowsTaskManager/internal/config"
 	"github.com/ersinkoc/WindowsTaskManager/internal/controller"
+	"github.com/ersinkoc/WindowsTaskManager/internal/desktop"
 	"github.com/ersinkoc/WindowsTaskManager/internal/event"
 	"github.com/ersinkoc/WindowsTaskManager/internal/platform"
 	"github.com/ersinkoc/WindowsTaskManager/internal/server"
@@ -39,6 +40,7 @@ func main() {
 		showVersion = flag.Bool("version", false, "print version and exit")
 		noTray      = flag.Bool("no-tray", false, "disable system tray icon")
 		noBrowser   = flag.Bool("no-browser", false, "do not open dashboard in browser")
+		noWindow    = flag.Bool("no-window", false, "server-only mode: do not show desktop window (equivalent to --no-browser but keeps API server running)")
 	)
 	flag.Parse()
 
@@ -156,8 +158,11 @@ func main() {
 
 	dashURL := fmt.Sprintf("http://%s:%d", cfg.Server.Host, cfg.Server.Port)
 
-	if cfg.Server.OpenBrowser && !*noBrowser {
-		// Wait briefly for the listener to come up.
+	// Determine what UI to show: desktop window (WebView2), browser, or headless.
+	showDesktop := !*noWindow && cfg.Server.OpenBrowser
+	showBrowser := !showDesktop && cfg.Server.OpenBrowser && !*noBrowser
+
+	if showBrowser {
 		go func() {
 			time.Sleep(400 * time.Millisecond)
 			_ = winapi.ShellExecute("open", dashURL, "", "", winapi.SW_SHOWNORMAL)
@@ -179,20 +184,44 @@ func main() {
 		}()
 	}
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-
-	select {
-	case s := <-sig:
-		log.Printf("signal: %v — shutting down", s)
-	case err := <-srvErr:
-		log.Printf("http server: %v", err)
+	// Main shutdown sequence: triggered by signal, server error, or desktop window close.
+	doShutdown := func() {
+		cancel()
+		if trayInst != nil {
+			trayInst.Stop()
+		}
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		_ = srv.Shutdown(shutdownCtx)
+		trayWG.Wait()
 	}
-	cancel()
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer shutdownCancel()
-	_ = srv.Shutdown(shutdownCtx)
-	trayWG.Wait()
+
+	if showDesktop {
+		// WebView2 must run on the main thread (COM requirement).
+		// Wait for server to be ready, then show window.
+		time.Sleep(400 * time.Millisecond)
+		win := desktop.New(dashURL, "Windows Task Manager", 1280, 800, doShutdown)
+		if win == nil {
+			// WebView2 unavailable — fall back to browser
+			if !*noBrowser {
+				go func() {
+					_ = winapi.ShellExecute("open", dashURL, "", "", winapi.SW_SHOWNORMAL)
+				}()
+			}
+		} else {
+			win.Run()
+		}
+	} else {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		select {
+		case s := <-sig:
+			log.Printf("signal: %v — shutting down", s)
+		case err := <-srvErr:
+			log.Printf("http server: %v", err)
+		}
+		doShutdown()
+	}
 }
 
 // clearDisabledDetectorAlerts wipes any active alerts whose detector was just

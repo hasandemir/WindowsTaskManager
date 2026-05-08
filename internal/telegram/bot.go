@@ -274,6 +274,8 @@ func (b *Bot) handleMessage(ctx context.Context, cfg *config.Config, msg *tgMess
 		reply = b.aiAnalyzeText(ctx, cfg, msg.Chat.ID, strings.Join(args, " "))
 	case "kill":
 		reply = b.pidAction(cfg, msg.Chat.ID, args, func(pid uint32) error { return b.controller.Kill(pid, true) }, "kill", "killed", true)
+	case "taskkill":
+		reply = b.nameAction(cfg, msg.Chat.ID, args, func(pid uint32) error { return b.controller.Kill(pid, true) }, "kill", "killed", true)
 	case "suspend":
 		reply = b.pidAction(cfg, msg.Chat.ID, args, func(pid uint32) error { return b.controller.Suspend(pid, true) }, "suspend", "suspended", true)
 	case "resume":
@@ -314,13 +316,17 @@ func helpText() string {
 		"/alerts - active anomaly alerts",
 		"/ask <question> - chat with the AI advisor",
 		"/analyze <question> - analyze current state and queue AI actions",
-		"/kill <pid> - kill a process",
+		"/kill <pid> - kill a process by PID",
+		"/taskkill [/F] [/IM] <name> - kill by process name (like Windows taskkill)",
 		"/suspend <pid> - suspend a process",
 		"/resume <pid> - resume a process",
 		"/killtop - kill the highest CPU non-protected process",
 		"/suspendtop - suspend the highest CPU non-protected process",
 		"/confirm <code> - confirm a pending kill/suspend action",
 		"/cancel <code> - cancel a pending kill/suspend action",
+		"",
+		"Name matching: /taskkill notepad matches notepad.exe (extension optional)",
+		"Force flag: /taskkill /F notepad skips confirmation",
 	}, "\n")
 }
 
@@ -399,6 +405,94 @@ func (b *Bot) pidAction(cfg *config.Config, chatID int64, args []string, fn func
 	}
 	_, success := b.pidActionTexts(pid, actionLabel, verb)
 	return success
+}
+
+func (b *Bot) nameAction(cfg *config.Config, chatID int64, args []string, fn func(uint32) error, actionLabel, verb string, requiresConfirm bool) string {
+	name, force := parseTaskkillArgs(args)
+	if name == "" {
+		return "Process name required. Usage: /taskkill [/F] [/IM] <name>"
+	}
+
+	pid, failText := b.findProcessByName(cfg, name)
+	if pid == 0 {
+		return failText
+	}
+
+	target := describeProcess("", pid)
+	if snap := b.store.Latest(); snap != nil {
+		target = describeProcess(snap.ProcessName(pid), pid)
+	}
+
+	if requiresConfirm && !force && cfg != nil && cfg.Telegram.RequireConfirm {
+		description := fmt.Sprintf("%s %s", actionLabel, target)
+		success := fmt.Sprintf("%s %s", titleWord(verb), target)
+		return b.queueConfirmation(chatID, cfg.Telegram.ConfirmTTL, description, success, func() error {
+			return fn(pid)
+		})
+	}
+	if err := fn(pid); err != nil {
+		return fmt.Sprintf("Action failed: %v", err)
+	}
+	return fmt.Sprintf("%s %s", titleWord(verb), target)
+}
+
+func parseTaskkillArgs(args []string) (name string, force bool) {
+	if len(args) == 0 {
+		return "", false
+	}
+	// Handle Windows-style /F flag anywhere in args
+	filtered := make([]string, 0, len(args))
+	for _, arg := range args {
+		upper := strings.ToUpper(arg)
+		if upper == "/F" || upper == "-F" || upper == "--FORCE" {
+			force = true
+			continue
+		}
+		if upper == "/IM" && len(args) > 1 {
+			// /IM next arg is the name
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	if len(filtered) == 0 {
+		return "", force
+	}
+	// Last non-flag argument is the process name
+	return filtered[len(filtered)-1], force
+}
+
+func (b *Bot) findProcessByName(cfg *config.Config, name string) (uint32, string) {
+	snap := b.store.Latest()
+	if snap == nil {
+		return 0, "No snapshot yet."
+	}
+	nameLower := strings.ToLower(name)
+	// Strip .exe suffix for matching
+	if strings.HasSuffix(nameLower, ".exe") {
+		nameLower = strings.TrimSuffix(nameLower, ".exe")
+	}
+	var candidates []metrics.ProcessInfo
+	for _, p := range snap.Processes {
+		pNameLower := strings.ToLower(p.Name)
+		if strings.HasSuffix(pNameLower, ".exe") {
+			pNameLower = strings.TrimSuffix(pNameLower, ".exe")
+		}
+		if pNameLower == nameLower {
+			candidates = append(candidates, p)
+		}
+	}
+	if len(candidates) == 0 {
+		return 0, fmt.Sprintf("No process found matching %q.", name)
+	}
+	// Return highest CPU candidate
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].CPUPercent > candidates[j].CPUPercent
+	})
+	best := candidates[0]
+	if best.PID == 0 || best.IsCritical || isProtectedProcess(cfg, best.Name) {
+		return 0, fmt.Sprintf("Process %q is protected or critical; use /kill %d directly to force.", name, best.PID)
+	}
+	return best.PID, ""
 }
 
 func (b *Bot) topProcessAction(cfg *config.Config, chatID int64, fn func(uint32) error, actionLabel, verb string, requiresConfirm bool) string {

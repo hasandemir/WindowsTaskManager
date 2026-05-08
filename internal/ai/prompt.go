@@ -26,14 +26,14 @@ Each item must be one of:
   {"type":"ignore","name":"<exe>","reason":"<short>"}
   {"type":"add_rule","rule":{"name":"<id>","match":"<exe>","metric":"cpu_percent|memory_bytes|thread_count","op":">=|>|<=|<","threshold":<num>,"for_seconds":<int>,"action":"alert|kill|suspend","cooldown_seconds":<int>},"reason":"<short>"}
 
-Rules:
-- NEVER suggest kill or suspend for Windows system processes (svchost, csrss,
-  lsass, wininit, winlogon, services, smss, explorer, dwm, MsMpEng,
-  SecurityHealthService, RuntimeBroker, taskhostw, fontdrvhost, ctfmon,
-  sihost, SearchHost, SearchIndexer, StartMenuExperienceHost, ShellExperienceHost,
-  conhost, dllhost, WmiPrvSE, spoolsv, audiodg, System, Registry). For these,
-  suggest "protect" or "ignore" instead.
-- Always include PID when acting on a specific process.
+CRITICAL RULES:
+- NEVER suggest kill or suspend for any process that could be a Windows system
+  process. When in doubt, recommend "protect" or "ignore" instead of destructive actions.
+- NEVER suggest kill or suspend for processes whose PID is NOT present in the
+  current snapshot data. Always cross-reference the PID.
+- Maximum 3 concrete actions per response. Prefer quality over quantity.
+- If a process is consuming high CPU but could be a legitimate user app, suggest
+  "protect" first and ask the user to verify.
 - Keep reasons under 80 chars.
 - Only recommend operations that are directly justified by the snapshot data.
 - Do not wrap the <actions> block in markdown fences.`

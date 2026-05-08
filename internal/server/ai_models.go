@@ -247,15 +247,40 @@ func (s *Server) handleAIModels(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
 		"models":  data,
 		"count":   len(data),
-		"source":  modelsDevURL,
-		"updated": snap.loadedAt.Format(time.RFC3339),
+		"source":   modelsDevURL,
+		"updated":  snap.loadedAt.Format(time.RFC3339),
+		"endpoint": s.effectiveAIEndpoint(),
 	}
 	if snap.lastErr != "" {
 		resp["error"] = snap.lastErr
 	}
 	if len(data) == 0 && snap.lastErr == "" {
-		// Cold start: refresh hasn't completed yet. Tell the client to retry.
 		w.Header().Set("Retry-After", "2")
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// effectiveAIEndpoint returns the AI endpoint URL actually in use.
+func (s *Server) effectiveAIEndpoint() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.cfg == nil {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(s.cfg.AI.Provider)) {
+	case "anthropic":
+		if s.cfg.AI.Endpoint != "" {
+			return strings.TrimRight(s.cfg.AI.Endpoint, "/") + "/v1/messages"
+		}
+		return "https://api.anthropic.com/v1/messages"
+	default:
+		if s.cfg.AI.Endpoint != "" {
+			ep := strings.TrimRight(s.cfg.AI.Endpoint, "/")
+			if strings.HasSuffix(ep, "/chat/completions") {
+				return ep
+			}
+			return ep + "/v1/chat/completions"
+		}
+		return "https://api.openai.com/v1/chat/completions"
+	}
 }

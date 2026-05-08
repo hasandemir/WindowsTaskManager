@@ -40,10 +40,13 @@ type Advisor struct {
 	httpClient *http.Client
 	emitter    *event.Emitter
 
-	lastErr        string
-	lastReqAt      time.Time
-	totalReqs      uint64
-	totalCacheHits uint64
+	lastErr         string
+	lastReqAt       time.Time
+	totalReqs       uint64
+	totalCacheHits  uint64
+	totalTokens     uint64
+	promptTokens    uint64
+	completionTokens uint64
 
 	chatMu      sync.Mutex
 	chatHistory []chatTurn
@@ -113,20 +116,28 @@ func (a *Advisor) Enabled() bool {
 func (a *Advisor) Status() map[string]any {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
+	var cacheHitRate float64
+	if a.totalReqs > 0 {
+		cacheHitRate = float64(a.totalCacheHits) / float64(a.totalReqs) * 100
+	}
 	return map[string]any{
-		"enabled":          a.cfg.AI.Enabled,
-		"configured":       a.cfg.AI.APIKey != "",
-		"provider":         providerOf(a.cfg),
-		"endpoint":         effectiveEndpoint(a.cfg),
-		"model":            a.cfg.AI.Model,
-		"language":         a.cfg.AI.Language,
-		"max_per_minute":   a.cfg.AI.MaxRequestsPerMinute,
-		"tokens_available": a.rl.Available(),
-		"cache_size":       a.cache.Size(),
-		"total_requests":   a.totalReqs,
-		"cache_hits":       a.totalCacheHits,
-		"last_request":     a.lastReqAt.Format(time.RFC3339),
-		"last_error":       a.lastErr,
+		"enabled":           a.cfg.AI.Enabled,
+		"configured":        a.cfg.AI.APIKey != "",
+		"provider":          providerOf(a.cfg),
+		"endpoint":          effectiveEndpoint(a.cfg),
+		"model":             a.cfg.AI.Model,
+		"language":          a.cfg.AI.Language,
+		"max_per_minute":     a.cfg.AI.MaxRequestsPerMinute,
+		"tokens_available":   a.rl.Available(),
+		"cache_size":        a.cache.Size(),
+		"total_requests":    a.totalReqs,
+		"cache_hits":        a.totalCacheHits,
+		"cache_hit_rate":     cacheHitRate,
+		"total_tokens":      a.totalTokens,
+		"prompt_tokens":     a.promptTokens,
+		"completion_tokens": a.completionTokens,
+		"last_request":      a.lastReqAt.Format(time.RFC3339),
+		"last_error":        a.lastErr,
 	}
 }
 
@@ -209,10 +220,15 @@ func (a *Advisor) runPrompt(ctx context.Context, cfg *config.Config, prompt stri
 		return nil, errors.New("AI rate limit exceeded; try again later")
 	}
 
-	answer, err := a.callProvider(ctx, cfg, prompt)
+	answer, tokenUsage, err := a.callProvider(ctx, cfg, prompt)
 	a.mu.Lock()
 	a.totalReqs++
 	a.lastReqAt = time.Now()
+	if tokenUsage != nil {
+		a.totalTokens += tokenUsage.Total
+		a.promptTokens += tokenUsage.Prompt
+		a.completionTokens += tokenUsage.Completion
+	}
 	if err != nil {
 		a.lastErr = statusErrorMessage(err)
 	} else {
@@ -228,15 +244,24 @@ func (a *Advisor) runPrompt(ctx context.Context, cfg *config.Config, prompt stri
 	return &AnalyzeResult{Answer: cleaned, Actions: actions}, nil
 }
 
+// TokenUsage holds token counts from a provider response.
+type TokenUsage struct {
+	Prompt     uint64
+	Completion uint64
+	Total      uint64
+}
+
 // callProvider dispatches the LLM call based on cfg.AI.Provider.
-func (a *Advisor) callProvider(ctx context.Context, cfg *config.Config, prompt string) (string, error) {
+func (a *Advisor) callProvider(ctx context.Context, cfg *config.Config, prompt string) (string, *TokenUsage, error) {
 	switch providerOf(cfg) {
 	case "anthropic":
-		return a.callAnthropic(ctx, cfg, prompt)
+		ans, usage, err := a.callAnthropic(ctx, cfg, prompt)
+		return ans, usage, err
 	case "openai":
-		return a.callOpenAI(ctx, cfg, prompt)
+		ans, usage, err := a.callOpenAI(ctx, cfg, prompt)
+		return ans, usage, err
 	default:
-		return "", fmt.Errorf("unknown AI provider %q (use 'anthropic' or 'openai')", cfg.AI.Provider)
+		return "", nil, fmt.Errorf("unknown AI provider %q (use 'anthropic' or 'openai')", cfg.AI.Provider)
 	}
 }
 

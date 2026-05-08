@@ -29,6 +29,10 @@ type anthropicResponse struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
+	Usage *struct {
+		InputTokens  int `json:"input_tokens,omitempty"`
+		OutputTokens int `json:"output_tokens,omitempty"`
+	} `json:"usage,omitempty"`
 	Error *struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
@@ -37,7 +41,7 @@ type anthropicResponse struct {
 
 // callAnthropic invokes Anthropic's /v1/messages endpoint (or any compatible
 // endpoint set via cfg.AI.Endpoint).
-func (a *Advisor) callAnthropic(ctx context.Context, cfg *config.Config, prompt string) (string, error) {
+func (a *Advisor) callAnthropic(ctx context.Context, cfg *config.Config, prompt string) (string, *TokenUsage, error) {
 	reqBody := anthropicRequest{
 		Model:     cfg.AI.Model,
 		System:    SystemPrompt(cfg.AI.Language),
@@ -48,13 +52,13 @@ func (a *Advisor) callAnthropic(ctx context.Context, cfg *config.Config, prompt 
 	}
 	buf, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	endpoint := normalizeAnthropicEndpoint(cfg.AI.Endpoint)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(buf))
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", cfg.AI.APIKey)
@@ -65,39 +69,47 @@ func (a *Advisor) callAnthropic(ctx context.Context, cfg *config.Config, prompt 
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("anthropic call: %w", err)
+		return "", nil, fmt.Errorf("anthropic call: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := readProviderBody(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
+		return "", nil, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("anthropic %d: %s", resp.StatusCode, truncateForError(string(body)))
+		return "", nil, fmt.Errorf("anthropic %d: %s", resp.StatusCode, truncateForError(string(body)))
 	}
 
 	var parsed anthropicResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return "", fmt.Errorf("parse response: %w (body: %s)", err, truncateForError(string(body)))
+		return "", nil, fmt.Errorf("parse response: %w (body: %s)", err, truncateForError(string(body)))
 	}
 	if parsed.Error != nil {
-		return "", fmt.Errorf("anthropic %s: %s", parsed.Error.Type, parsed.Error.Message)
+		return "", nil, fmt.Errorf("anthropic %s: %s", parsed.Error.Type, parsed.Error.Message)
 	}
-	// Prefer explicit text blocks, but fall back to any non-empty Text field —
-	// some Anthropic-compatible providers (z.ai, others) use slightly different
-	// content types like "message" or omit the Type altogether.
+
+	var usage *TokenUsage
+	if parsed.Usage != nil {
+		usage = &TokenUsage{
+			Prompt:     uint64(parsed.Usage.InputTokens),
+			Completion: uint64(parsed.Usage.OutputTokens),
+			Total:      uint64(parsed.Usage.InputTokens + parsed.Usage.OutputTokens),
+		}
+	}
+
+	// Prefer explicit text blocks, but fall back to any non-empty Text field.
 	for _, c := range parsed.Content {
 		if c.Type == "text" && c.Text != "" {
-			return c.Text, nil
+			return c.Text, usage, nil
 		}
 	}
 	for _, c := range parsed.Content {
 		if c.Text != "" {
-			return c.Text, nil
+			return c.Text, usage, nil
 		}
 	}
-	return "", fmt.Errorf("anthropic: no text content in response: %s", truncateForError(string(body)))
+	return "", usage, fmt.Errorf("anthropic: no text content in response: %s", truncateForError(string(body)))
 }
 
 // normalizeAnthropicEndpoint ensures the endpoint points at a /messages URL.

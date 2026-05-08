@@ -401,8 +401,11 @@ func buildBackgroundPrompt(alert anomaly.Alert) string {
 	var b strings.Builder
 	b.WriteString("A new CRITICAL anomaly alert was raised by the background watcher.\n")
 	b.WriteString("Focus on this alert first, but use the full snapshot for context.\n")
-	b.WriteString("Give a concise health assessment, explain why the alert matters, and suggest the safest next step.\n")
-	b.WriteString("Prefer protect/ignore/add_rule over kill/suspend unless the target is clearly non-system and directly implicated.\n\n")
+	b.WriteString("\nCRITICAL SAFETY RULES FOR THIS ANALYSIS:\n")
+	b.WriteString("- If the alert targets a Windows system process or a PID you cannot verify from the snapshot, recommend \"protect\" or \"ignore\" — NOT kill or suspend.\n")
+	b.WriteString("- Never recommend an action against a PID not present in the current snapshot.\n")
+	b.WriteString("- Prefer the minimum-risk action that addresses the root cause.\n")
+	b.WriteString("- Maximum 3 actions in your response.\n\n")
 	fmt.Fprintf(&b, "Alert type: %s\n", alert.Type)
 	fmt.Fprintf(&b, "Title: %s\n", alert.Title)
 	if alert.Description != "" {

@@ -34,6 +34,11 @@ type openaiResponse struct {
 		Message      openaiMessage `json:"message"`
 		FinishReason string        `json:"finish_reason"`
 	} `json:"choices"`
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage,omitempty"`
 	Error *struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
@@ -44,7 +49,7 @@ type openaiResponse struct {
 // The default endpoint is OpenAI itself; the user can override it via
 // cfg.AI.Endpoint to talk to OpenRouter / Groq / DeepSeek / Together /
 // Mistral / Ollama / LM Studio / etc.
-func (a *Advisor) callOpenAI(ctx context.Context, cfg *config.Config, prompt string) (string, error) {
+func (a *Advisor) callOpenAI(ctx context.Context, cfg *config.Config, prompt string) (string, *TokenUsage, error) {
 	reqBody := openaiRequest{
 		Model:     cfg.AI.Model,
 		MaxTokens: cfg.AI.MaxTokens,
@@ -55,7 +60,7 @@ func (a *Advisor) callOpenAI(ctx context.Context, cfg *config.Config, prompt str
 	}
 	buf, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	endpoint := cfg.AI.Endpoint
@@ -64,7 +69,7 @@ func (a *Advisor) callOpenAI(ctx context.Context, cfg *config.Config, prompt str
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(buf))
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if cfg.AI.APIKey != "" {
@@ -76,29 +81,39 @@ func (a *Advisor) callOpenAI(ctx context.Context, cfg *config.Config, prompt str
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("openai call: %w", err)
+		return "", nil, fmt.Errorf("openai call: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := readProviderBody(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
+		return "", nil, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("openai %d: %s", resp.StatusCode, truncateForError(string(body)))
+		return "", nil, fmt.Errorf("openai %d: %s", resp.StatusCode, truncateForError(string(body)))
 	}
 
 	var parsed openaiResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return "", fmt.Errorf("parse response: %w", err)
+		return "", nil, fmt.Errorf("parse response: %w", err)
 	}
 	if parsed.Error != nil {
-		return "", fmt.Errorf("openai %s: %s", parsed.Error.Type, parsed.Error.Message)
+		return "", nil, fmt.Errorf("openai %s: %s", parsed.Error.Type, parsed.Error.Message)
 	}
 	if len(parsed.Choices) == 0 {
-		return "", errors.New("openai: empty response")
+		return "", nil, errors.New("openai: empty response")
 	}
-	return strings.TrimSpace(parsed.Choices[0].Message.Content), nil
+
+	var usage *TokenUsage
+	if parsed.Usage != nil {
+		usage = &TokenUsage{
+			Prompt:     uint64(parsed.Usage.PromptTokens),
+			Completion: uint64(parsed.Usage.CompletionTokens),
+			Total:      uint64(parsed.Usage.TotalTokens),
+		}
+	}
+
+	return strings.TrimSpace(parsed.Choices[0].Message.Content), usage, nil
 }
 
 func truncateForError(s string) string {

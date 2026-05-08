@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, Boxes, PlugZap, ShieldBan } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowDown, ArrowUp, Boxes, PlugZap, ShieldBan, X } from "lucide-react";
 import { DetailTile, SummaryCard } from "../components/shared/detail-tile";
 import { EmptyState } from "../components/shared/empty-state";
 import { PageHeader } from "../components/shared/page-header";
@@ -13,6 +13,7 @@ import { useDebouncedValue } from "../hooks/use-debounced-value";
 import { useInfoQuery, useProcessActionMutation, useProcessConnectionsQuery, useSystemSnapshotQuery } from "../lib/api-client";
 import { formatBytes } from "../lib/format";
 import type { PortBinding, ProcessInfo } from "../types/api";
+import { createPortal } from "react-dom";
 
 type ProcessSortKey = "cpu" | "memory" | "name" | "threads" | "connections" | "pid";
 type SortDirection = "desc" | "asc";
@@ -22,7 +23,7 @@ export function ProcessesPage() {
   const { data: info } = useInfoQuery();
   const actionMutation = useProcessActionMutation({ successMessage: false });
   const [killCandidate, setKillCandidate] = useState<ProcessInfo | null>(null);
-  const [selectedProcess, setSelectedProcess] = useState<ProcessInfo | null>(null);
+  const [detailProcess, setDetailProcess] = useState<ProcessInfo | null>(null);
   const [searchValue, setSearchValue] = useState("");
   const [sortKey, setSortKey] = useState<ProcessSortKey>("cpu");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
@@ -56,8 +57,8 @@ export function ProcessesPage() {
 
   const topProcess = filteredProcesses[0] ?? null;
   const memoryLeader = [...filteredProcesses].sort((left, right) => right.working_set - left.working_set)[0] ?? null;
-  const selectedPID = selectedProcess?.pid ?? null;
-  const { data: processConnections = [], isLoading: connectionsLoading } = useProcessConnectionsQuery(selectedPID);
+  const detailPID = detailProcess?.pid ?? null;
+  const { data: processConnections = [], isLoading: connectionsLoading } = useProcessConnectionsQuery(detailPID);
   const portSummary = useMemo(() => summarizePorts(processConnections), [processConnections]);
 
   const updateSort = (nextKey: ProcessSortKey) => {
@@ -160,9 +161,9 @@ export function ProcessesPage() {
                 </div>
                 <div className="soft-panel">
                   <div className="metric-label">Selection</div>
-                  <div className="mt-1 truncate text-sm font-semibold text-foreground">{selectedProcess ? selectedProcess.name : "Nothing selected"}</div>
+                  <div className="mt-1 truncate text-sm font-semibold text-foreground">{detailProcess ? detailProcess.name : "Nothing selected"}</div>
                   <div className="mt-0.5 text-xs text-secondary">
-                    {selectedProcess ? `PID ${selectedProcess.pid}` : "Choose a row for ports and connections"}
+                    {detailProcess ? `PID ${detailProcess.pid}` : "Click Details for ports and connections"}
                   </div>
                 </div>
                 <div className="soft-panel">
@@ -187,7 +188,7 @@ export function ProcessesPage() {
                 process={process}
                 isPending={actionMutation.isPending}
                 isSelf={process.pid === selfPID}
-                onDetails={() => setSelectedProcess(process)}
+                onDetails={() => setDetailProcess(process)}
                 onKill={() => setKillCandidate(process)}
                 onResume={() => actionMutation.mutate({ pid: process.pid, action: "resume" })}
                 onSuspend={() => actionMutation.mutate({ pid: process.pid, action: "suspend" })}
@@ -231,17 +232,18 @@ export function ProcessesPage() {
                     <tr
                       key={process.pid}
                       className={
-                        selectedProcess?.pid === process.pid
+                        detailProcess?.pid === process.pid
                           ? "border-b border-border bg-accent-muted/45 transition-colors"
                           : "border-b border-border transition-colors hover:bg-background/55"
                       }
                     >
                       <td className="px-4 py-2.5 pr-3 font-mono text-secondary whitespace-nowrap sm:px-5">{process.pid}</td>
-                      <td className="py-2.5 pr-3 text-foreground">
+                      <td className="max-w-[12rem] py-2.5 pr-3 text-foreground">
                         <button
                           type="button"
-                          className="max-w-full truncate text-left font-medium hover:text-accent"
-                          onClick={() => setSelectedProcess(process)}
+                          className="block max-w-full truncate text-left font-medium hover:text-accent"
+                          onClick={() => setDetailProcess(process)}
+                          title={process.name}
                         >
                           {process.name}
                         </button>
@@ -252,15 +254,9 @@ export function ProcessesPage() {
                       <td className="py-2.5 pr-3 tabular-nums text-secondary whitespace-nowrap">{process.thread_count}</td>
                       <td className="py-2.5 pr-3 text-xs font-semibold text-secondary whitespace-nowrap">{rowState}</td>
                       <td className="py-2.5 pr-4 sm:pr-5">
-                        <div className="flex flex-wrap items-center justify-end gap-1.5">
-                          <Button size="sm" variant="ghost" onClick={() => setSelectedProcess(process)}>
+                        <div className="flex items-center gap-1.5">
+                          <Button size="sm" variant="secondary" onClick={() => setDetailProcess(process)}>
                             Details
-                          </Button>
-                          <Button size="sm" variant="secondary" disabled={actionsDisabled} onClick={() => actionMutation.mutate({ pid: process.pid, action: "suspend" })}>
-                            Suspend
-                          </Button>
-                          <Button size="sm" variant="ghost" disabled={actionMutation.isPending || isSelf} onClick={() => actionMutation.mutate({ pid: process.pid, action: "resume" })}>
-                            Resume
                           </Button>
                           <Button size="sm" variant="danger" disabled={actionsDisabled} onClick={() => setKillCandidate(process)}>
                             Kill
@@ -275,61 +271,23 @@ export function ProcessesPage() {
           </div>
         </Card>
 
-        {selectedProcess ? (
-          <Card className="space-y-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="eyebrow">Inspector</div>
-                <h2 className="mt-2 text-lg font-semibold tracking-tight text-foreground">{selectedProcess.name}</h2>
-                <p className="mt-1 text-sm leading-6 text-secondary">PID {selectedProcess.pid}. Footprint and live socket ownership for the selected process.</p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Badge variant={selectedProcess.is_critical ? "warning" : "info"}>
-                  {selectedProcess.is_critical ? "Critical process" : "Controllable process"}
-                </Badge>
-                {selectedProcess.pid === selfPID ? <Badge variant="error">WTM self process</Badge> : null}
-              </div>
-            </div>
-            <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
-              <DetailTile label="CPU" value={`${selectedProcess.cpu_percent.toFixed(1)}%`} />
-              <DetailTile label="Memory" value={formatBytes(selectedProcess.working_set)} />
-              <DetailTile label="Threads" value={String(selectedProcess.thread_count)} />
-              <DetailTile label="Connections" value={String(selectedProcess.connections)} />
-            </div>
-            <div className="grid gap-2.5 xl:grid-cols-[minmax(0,1.4fr)_minmax(15rem,0.8fr)]">
-              <div className="soft-panel space-y-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-foreground">Port usage</div>
-                    <div className="text-xs text-secondary">Live local ports and remote peers for this process.</div>
-                  </div>
-                  <Badge variant="neutral">{connectionsLoading ? "Loading" : `${processConnections.length} rows`}</Badge>
-                </div>
-                {connectionsLoading ? (
-                  <div className="text-sm text-secondary">Loading connection details...</div>
-                ) : processConnections.length === 0 ? (
-                  <div className="text-sm text-secondary">No active port usage was reported for this process in the current snapshot.</div>
-                ) : (
-                  <div className="grid gap-2 xl:grid-cols-2">
-                    {processConnections.slice(0, 6).map((binding) => (
-                      <PortUsageRow key={`${binding.protocol}-${binding.local_port}-${binding.remote_port}-${binding.state}`} binding={binding} />
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="soft-panel space-y-3">
-                <div className="text-sm font-semibold text-foreground">Connection summary</div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <DetailTile label="Listening ports" value={String(portSummary.listeningPorts)} />
-                  <DetailTile label="Remote endpoints" value={String(portSummary.remoteEndpoints)} />
-                  <DetailTile label="TCP rows" value={String(portSummary.tcpRows)} />
-                  <DetailTile label="UDP rows" value={String(portSummary.udpRows)} />
-                </div>
-              </div>
-            </div>
-          </Card>
-        ) : null}
       </div>
+
+      {detailProcess && createPortal(
+        <ProcessDetailModal
+          process={detailProcess}
+          isSelf={detailProcess.pid === selfPID}
+          connections={processConnections}
+          connectionsLoading={connectionsLoading}
+          portSummary={portSummary}
+          actionsDisabled={actionMutation.isPending || detailProcess.is_critical || detailProcess.pid === selfPID}
+          onClose={() => setDetailProcess(null)}
+          onKill={() => { setDetailProcess(null); setKillCandidate(detailProcess); }}
+          onSuspend={() => actionMutation.mutate({ pid: detailProcess.pid, action: "suspend" })}
+          onResume={() => actionMutation.mutate({ pid: detailProcess.pid, action: "resume" })}
+        />,
+        document.body,
+      )}
       <ConfirmDialog
         open={killCandidate !== null}
         title={killCandidate ? `Kill ${killCandidate.name}?` : "Kill process?"}
@@ -514,4 +472,134 @@ function summarizePorts(bindings: PortBinding[]) {
   }
 
   return { listeningPorts, remoteEndpoints, tcpRows, udpRows };
+}
+
+interface ProcessDetailModalProps {
+  process: ProcessInfo;
+  isSelf: boolean;
+  connections: PortBinding[];
+  connectionsLoading: boolean;
+  portSummary: ReturnType<typeof summarizePorts>;
+  actionsDisabled: boolean;
+  onClose: () => void;
+  onKill: () => void;
+  onSuspend: () => void;
+  onResume: () => void;
+}
+
+function ProcessDetailModal({
+  process,
+  isSelf,
+  connections,
+  connectionsLoading,
+  portSummary,
+  actionsDisabled,
+  onClose,
+  onKill,
+  onSuspend,
+  onResume,
+}: ProcessDetailModalProps) {
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handler);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", handler);
+    };
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-[300] flex items-center justify-center px-4 py-8" aria-modal="true">
+      <button type="button" aria-label="Close" className="absolute inset-0 bg-[color:var(--overlay)] backdrop-blur-sm" onClick={onClose} />
+      <div className="relative z-[301] w-full max-w-2xl rounded-3xl border border-border bg-surface shadow-lg max-h-[85vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-4 border-b border-border px-6 py-5">
+          <div className="min-w-0">
+            <div className="eyebrow">Process detail</div>
+            <h2 className="mt-2 truncate text-xl font-semibold tracking-tight text-foreground" title={process.name}>{process.name}</h2>
+            <p className="mt-1 text-sm text-secondary">PID {process.pid}</p>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="flex flex-wrap gap-2">
+              {process.is_critical && <Badge variant="warning">Critical</Badge>}
+              {isSelf && <Badge variant="error">WTM self</Badge>}
+            </div>
+            <button type="button" aria-label="Close modal" className="rounded-lg border border-border p-1.5 text-secondary hover:bg-background-muted hover:text-foreground transition-colors" onClick={onClose}>
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+          {/* Metrics */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <DetailTile label="CPU" value={`${process.cpu_percent.toFixed(1)}%`} />
+            <DetailTile label="Memory" value={formatBytes(process.working_set)} />
+            <DetailTile label="Threads" value={String(process.thread_count)} />
+            <DetailTile label="Ports" value={String(process.connections)} />
+          </div>
+
+          {/* Actions */}
+          <div className="space-y-3">
+            <div className="text-sm font-semibold text-foreground">Actions</div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="danger" disabled={actionsDisabled} onClick={onKill}>
+                Kill process
+              </Button>
+              <Button variant="secondary" disabled={actionsDisabled} onClick={onSuspend}>
+                Suspend
+              </Button>
+              <Button variant="ghost" disabled={actionsDisabled} onClick={onResume}>
+                Resume
+              </Button>
+            </div>
+            {isSelf && (
+              <div className="flex items-center gap-2 rounded-lg border border-error bg-[color:var(--error-bg)] px-3 py-2.5 text-sm text-error">
+                <ShieldBan className="h-4 w-4 shrink-0" />
+                WTM protects its own process from terminate and suspend actions.
+              </div>
+            )}
+          </div>
+
+          {/* Ports */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-foreground">Port usage</div>
+                <div className="text-xs text-secondary">Live local ports and remote peers.</div>
+              </div>
+              <Badge variant="neutral">{connectionsLoading ? "..." : `${connections.length} rows`}</Badge>
+            </div>
+            {connectionsLoading ? (
+              <p className="text-sm text-secondary">Loading...</p>
+            ) : connections.length === 0 ? (
+              <p className="text-sm text-secondary">No active ports in the current snapshot.</p>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {connections.slice(0, 8).map((b) => (
+                  <PortUsageRow key={`${b.protocol}-${b.local_port}-${b.remote_port}-${b.state}`} binding={b} />
+                ))}
+                {connections.length > 8 && (
+                  <div className="text-xs text-secondary sm:col-span-2">+{connections.length - 8} more rows</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Connection summary */}
+          {!connectionsLoading && connections.length > 0 && (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <DetailTile label="Listening" value={String(portSummary.listeningPorts)} />
+              <DetailTile label="Remote peers" value={String(portSummary.remoteEndpoints)} />
+              <DetailTile label="TCP rows" value={String(portSummary.tcpRows)} />
+              <DetailTile label="UDP rows" value={String(portSummary.udpRows)} />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }

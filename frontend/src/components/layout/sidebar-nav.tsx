@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { Bot, Boxes, Cpu, GitBranch, HardDrive, Info, Network, Settings, ShieldAlert, Sparkles, Workflow } from "lucide-react";
+import { Bot, Boxes, Cpu, GitBranch, HardDrive, Info, LayoutDashboard, Network, Settings, ShieldAlert, Sparkles, Workflow } from "lucide-react";
 import { NavLink } from "react-router";
 import type { AppRoutePath } from "../../app/route-map";
 import { prefetchRoute } from "../../app/route-map";
@@ -17,6 +17,7 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { to: "/", label: "Overview", icon: Cpu },
+  { to: "/overview", label: "Metrics", icon: LayoutDashboard },
   { to: "/processes", label: "Processes", icon: Boxes },
   { to: "/tree", label: "Tree", icon: GitBranch },
   { to: "/ports", label: "Ports", icon: Network },

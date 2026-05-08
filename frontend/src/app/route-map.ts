@@ -1,5 +1,6 @@
 export const routeImports = {
   "/": () => import("../pages/dashboard-page"),
+  "/overview": () => import("../pages/overview-page"),
   "/processes": () => import("../pages/processes-page"),
   "/tree": () => import("../pages/tree-page"),
   "/ports": () => import("../pages/ports-page"),

@@ -7,6 +7,7 @@ import { PageSkeleton } from "../components/shared/page-skeleton";
 import { RouteErrorState } from "../components/shared/route-error-state";
 
 const DashboardPage = lazy(async () => routeImports["/"]().then((mod) => ({ default: mod.DashboardPage })));
+const OverviewPage = lazy(async () => routeImports["/overview"]().then((mod) => ({ default: mod.OverviewPage })));
 const ProcessesPage = lazy(async () => routeImports["/processes"]().then((mod) => ({ default: mod.ProcessesPage })));
 const TreePage = lazy(async () => routeImports["/tree"]().then((mod) => ({ default: mod.TreePage })));
 const PortsPage = lazy(async () => routeImports["/ports"]().then((mod) => ({ default: mod.PortsPage })));
@@ -28,6 +29,7 @@ export const appRouter = createBrowserRouter([
     errorElement: <RouteErrorState />,
     children: [
       { index: true, element: withSuspense(<DashboardPage />) },
+      { path: "overview", element: withSuspense(<OverviewPage />) },
       { path: "processes", element: withSuspense(<ProcessesPage />) },
       { path: "tree", element: withSuspense(<TreePage />) },
       { path: "ports", element: withSuspense(<PortsPage />) },
